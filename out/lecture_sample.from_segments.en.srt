@@ -1,0 +1,15 @@
+1
+00:00:01,398 --> 00:00:03,884
+SPEAKER_00: it will have the parallax. So when
+
+2
+00:00:05,247 --> 00:00:07,191
+SPEAKER_00: Sintype solves the camera,
+
+3
+00:00:08,794 --> 00:00:17,654
+SPEAKER_00: it will calculate it better. It's the same as over here. From this bridge to this bridge, when the camera is moving,
+
+4
+00:00:19,177 --> 00:00:20,841
+SPEAKER_00: it's gonna have the parallax.

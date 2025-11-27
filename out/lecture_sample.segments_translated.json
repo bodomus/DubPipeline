@@ -1,0 +1,34 @@
+[
+  {
+    "id": 0,
+    "speaker": "SPEAKER_00",
+    "start": 1.398,
+    "end": 3.884,
+    "text": "it will have the parallax. So when",
+    "text_ru": "У него будет параллакс. Когда"
+  },
+  {
+    "id": 1,
+    "speaker": "SPEAKER_00",
+    "start": 5.247,
+    "end": 7.191,
+    "text": "Sintype solves the camera,",
+    "text_ru": "Синтип решает проблему камеры,"
+  },
+  {
+    "id": 2,
+    "speaker": "SPEAKER_00",
+    "start": 8.794,
+    "end": 17.654,
+    "text": "it will calculate it better. It's the same as over here. From this bridge to this bridge, when the camera is moving,",
+    "text_ru": "Это будет лучше рассчитать. Здесь то же самое. От этого моста к этому мосту, когда камера движется,"
+  },
+  {
+    "id": 3,
+    "speaker": "SPEAKER_00",
+    "start": 19.177,
+    "end": 20.841,
+    "text": "it's gonna have the parallax.",
+    "text_ru": "Это будет параллакс."
+  }
+]
