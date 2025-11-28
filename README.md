@@ -44,3 +44,14 @@ pip install soundfile numpy
 
 Запуск 
 .\tools\tts_align_and_mix.py
+
+
+3. Слияние звуковой дорожки в видео файл 
+mux_ru_audio.py
+
+```bash
+python .\tools\mux_ru_audio.py ^
+  --video in\lecture_sample.mp4 ^
+  --audio out\lecture_sample.ru_full.wav ^
+  --out out\lecture_sample.ru.replace.mp4 ^
+  --mode replace
