@@ -46,4 +46,4 @@ def translate_segments(input_file, output_file):
 
 if __name__ == "__main__":
     ensure_argos_model_installed()
-    translate_segments("d:\AI\DubPipeline\out\lecture_sample.segments.json", "d:\AI\DubPipeline\out\lecture_sample.segments_translated.json")
+    translate_segments("d:\AI\DubPipeline\out\\2.segments.json", "d:\AI\DubPipeline\out\\2.segments_translated.json")

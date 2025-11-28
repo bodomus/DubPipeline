@@ -13,10 +13,16 @@ translate videos
 ```
 
 # **_Запуск_**
-
+получить первый .srt из реального аудио.
+Положить фвйл D:\AI\DubPipeline\tests\data\lecture_sample.wav
+Запустить
 ```bash
 python .\tools\test_whisperx_to_srt.py
 ```
+Ожидание
+tests\output\lecture_sample.en.srt
+
+
 
 
 # **_Запуск_4 шага**
@@ -49,9 +55,13 @@ pip install soundfile numpy
 3. Слияние звуковой дорожки в видео файл 
 mux_ru_audio.py
 
+1) Заменить оригинальную аудиодорожку:
 ```bash
+
 python .\tools\mux_ru_audio.py ^
   --video in\lecture_sample.mp4 ^
   --audio out\lecture_sample.ru_full.wav ^
   --out out\lecture_sample.ru.replace.mp4 ^
   --mode replace
+```
+2) Добавить русскую дорожку к оригиналу (рекомендую в MKV):
