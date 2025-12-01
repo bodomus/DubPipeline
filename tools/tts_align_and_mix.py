@@ -210,10 +210,10 @@ def mix_aligned_segments_to_timeline(
 
 
 def main():
-    segments_path = Path("out/2.segments_translated.json")
+    segments_path = Path("out/21305.segments_translated.json")
     tts_dir = Path("out/tts_ru_segments")
     aligned_dir = Path("out/tts_ru_segments_aligned")
-    out_mix_path = Path("out/2.ru_full.wav")
+    out_mix_path = Path("out/21305.ru_full.wav")
 
     print(f"[INFO] Loading segments from {segments_path}")
     with segments_path.open("r", encoding="utf-8") as f:

@@ -9,7 +9,7 @@ import whisperx
 # === НАСТРОЙКИ =================================================================
 
 # Путь к аудио (поставьте сюда тот же файл, что вы используете для SRT-теста)
-AUDIO_PATH = "d:\AI\DubPipeline\\tests\data\\2.wav"   # <-- поправьте под себя
+AUDIO_PATH = "J:\Projects\!!!AI\DubPipeline\\tests\data\\21305.wav"   # <-- поправьте под себя
 
 # Модель Whisper / Faster-Whisper через whisperx
 MODEL_NAME = "large-v2"                  # как в вашем тесте

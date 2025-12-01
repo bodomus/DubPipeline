@@ -9,8 +9,8 @@ COMPUTE_TYPE = "float16" if DEVICE == "cuda" else "int8"
 MODEL_NAME = "small.en"  # экономим VRAM
 
 ROOT = Path(__file__).resolve().parents[1]
-INPUT_AUDIO = ROOT / "tests" / "data" / "2.wav"
-OUTPUT_SRT = ROOT / "tests" / "output" / "2.en.srt"
+INPUT_AUDIO = ROOT / "tests" / "data" / "21035.wav"
+OUTPUT_SRT = ROOT / "tests" / "output" / "21035.en.srt"
 
 OUTPUT_SRT.parent.mkdir(parents=True, exist_ok=True)
 

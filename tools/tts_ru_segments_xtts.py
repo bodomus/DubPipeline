@@ -7,7 +7,7 @@ from TTS.api import TTS
 
 def main():
     # --- НАСТРОЙКИ ---
-    segments_path = Path("out/lecture_sample.segments_translated.json")
+    segments_path = Path("out/21305.segments_translated.json")
     out_dir = Path("out/tts_ru_segments")
 
     model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
