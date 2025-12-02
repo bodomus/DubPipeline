@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-from ..tools.yaml_parser import load_config
+#from yaml_parser import load_config
 
 import yaml
 
@@ -124,7 +124,7 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         audio_codec=str(ffmpeg_dict.get("audio_codec", "pcm_s16le")),
     )
 
-    params = load_config(pipeline_file)
+#    params = load_config(pipeline_file)
 
     return PipelineConfig(
         project_name=project_name,

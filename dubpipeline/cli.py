@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .config import load_pipeline_config
-from .steps import step_extract_audio
+from config import load_pipeline_config
+from steps import step_extract_audio
 
 
 def main() -> None:
