@@ -1,6 +1,6 @@
 # EN -> RU
 from typing import List
-from .transcriber import Segment
+from dubpipeline.transcriber import Segment
 
 class Translator:
     def __init__(self):

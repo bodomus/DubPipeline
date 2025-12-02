@@ -1,0 +1,33 @@
+project_name: "video_sample"
+input_video: "video_sample.mp4"
+
+languages:
+  src: "en"
+  tgt: "ru"
+
+paths:
+  workdir: "."                       # относительно папки проекта
+  out_dir: "out"
+  input_video: "58_EdgeRipples.mp4"
+  segments_json: "out/segments/58_EdgeRipples.segments.json"
+  segments_ru_json: "out/segments/58_EdgeRipples.segments.ru.json"
+  tts_segments_dir: "out/tts_ru_segments_aligned"
+  final_video: "out/58_EdgeRipples.ru.muxed.mp4"
+
+steps:
+  extract_audio: true
+  asr_whisperx: true
+  translate: true
+  tts: true
+  merge: true
+
+tts:
+  voice: "some_local_tts_voice_id"
+  sample_rate: 22050
+
+ffmpeg:
+  audio_codec: "pcm_s16le"
+  audio_bitrate: "128k"
+  sample_rate: 16000
+  channels: 1
+

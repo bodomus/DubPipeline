@@ -2,8 +2,8 @@ import json
 import pathlib
 
 
-INPUT_SEGMENTS = "out/lecture_sample.segments.json"   # поправьте путь, если нужно
-OUTPUT_SRT = "out/lecture_sample.from_segments.en.srt"
+INPUT_SEGMENTS = "out/video_sample.segments.json"   # поправьте путь, если нужно
+OUTPUT_SRT = "out/video_sample.from_segments.en.srt"
 
 
 def format_timestamp(seconds: float) -> str:

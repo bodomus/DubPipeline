@@ -2,9 +2,9 @@
 
 from pathlib import Path
 from .config import config
-from .audio_extractor import AudioExtractor
+from dubpipeline.steps.step_extract_audio import AudioExtractor
 from .transcriber import Transcriber
-from .translator import Translator
+from dubpipeline.steps.step_translate import Translator
 from .subtitles import SubtitleFormatter
 
 class SubtitlesPipeline:
