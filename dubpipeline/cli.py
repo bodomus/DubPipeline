@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from config import load_pipeline_config
-from steps import step_extract_audio
+from .config import load_pipeline_config
+from .steps import step_extract_audio, step_whisperx
 
 
 def main() -> None:
@@ -28,11 +28,16 @@ def main() -> None:
     cfg = load_pipeline_config(pipeline_path)
 
     if args.command == "run":
-        # Пока реализован только шаг extract_audio.
         if cfg.steps.extract_audio:
             step_extract_audio.run(cfg)
-        else:
-            print("[dubpipeline] Шаг extract_audio отключён в конфиге.")
+        if cfg.steps.asr_whisperx:
+            step_whisperx.run(cfg)
+        #if cfg.steps.translate:
+        #    step_translate.run(cfg)
+        #if cfg.steps.tts:
+        #    step_tts.run(cfg)
+        #if cfg.steps.merge:
+        #    step_merge.run(cfg)
 
 
 if __name__ == "__main__":
