@@ -7,6 +7,11 @@ from typing import Any, Dict, Optional
 
 import yaml
 
+from dubpipeline.load_config import load_config
+
+
+#from dubpipeline.load_config import load_config
+
 
 @dataclass
 class StepsConfig:
@@ -24,6 +29,12 @@ class PathsConfig:
     input_video: Path
     out_dir: Path
     audio_wav: Path
+    segments_path: Path
+    segments_ru_path: Path
+    words_path:Path
+    segments_file:Path
+    segments_ru_file: Path
+    final_video:Path
 
 
 @dataclass
@@ -49,6 +60,9 @@ class PipelineConfig:
 
     # Настройки ffmpeg/аудио
     ffmpeg: FfmpegConfig
+    # режим добавления\вставки аудио
+    mode:str
+
 
 
 def _get_nested(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -62,7 +76,7 @@ def _get_nested(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
 
 def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     """Загрузить и провалидировать *.pipeline.yaml, вернуть PipelineConfig."""
-
+    #sd = load_config(pipeline_file)
     if not pipeline_file.exists():
         raise FileNotFoundError(f"Не найден файл конфига: {pipeline_file}")
 
@@ -71,6 +85,9 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     with pipeline_file.open("r", encoding="utf-8") as f:
         raw_cfg: Dict[str, Any] = yaml.safe_load(f) or {}
 
+    mode = raw_cfg.get("mode")
+    if not mode:
+        mode="add"
     project_name = raw_cfg.get("project_name")
     if not project_name:
         # Если явно не задано, возьмём имя файла без суффикса
@@ -109,11 +126,19 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     else:
         audio_wav = (workdir / audio_wav_str).resolve()
 
+    final_video_str: Optional[str] = paths_dict.get("final_video")
+
     paths = PathsConfig(
         workdir=workdir,
         input_video=input_video,
         out_dir=out_dir,
         audio_wav=audio_wav,
+        segments_path=out_dir,
+        segments_ru_path=out_dir,
+        words_path=out_dir,
+        segments_file=out_dir,
+        segments_ru_file=out_dir,
+        final_video=final_video_str,
     )
 
     # --- FFMPEG ---
@@ -132,6 +157,7 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         paths=paths,
         steps=steps,
         ffmpeg=ffmpeg,
+        mode=mode,
     )
 
 

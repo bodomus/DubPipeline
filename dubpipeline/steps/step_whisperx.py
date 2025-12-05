@@ -1,20 +1,22 @@
+from ..config import PipelineConfig
+
 import os
 import json
 import pathlib
 
 import torch
 import whisperx
+from pathlib import Path
 
-from dubpipeline.config import PipelineConfig
 
 # === НАСТРОЙКИ =================================================================
 
 # Путь к аудио (поставьте сюда тот же файл, что вы используете для SRT-теста)
-#AUDIO_PATH = "J:\Projects\!!!AI\DubPipeline\\tests\data\\21305.wav"   # <-- поправьте под себя
+#AUDIO_PATH = Path()
 
 # Модель Whisper / Faster-Whisper через whisperx
 MODEL_NAME = "large-v2"                  # как в вашем тесте
-BATCH_SIZE = 4
+BATCH_SIZE = 1
 
 # Порог склейки слов в один сегмент (секунды)
 MAX_GAP_BETWEEN_WORDS = 0.8
@@ -64,7 +66,9 @@ def merge_words_to_segments(words, max_gap=0.8):
     return segments
 
 
-def run(cfg: PipelineConfig):
+# === ОСНОВНОЙ PIPELINE =========================================================
+
+def run(cfg:PipelineConfig):
     # Папка для результатов
     OUT_DIR = cfg.paths.out_dir
     OUT_DIR.mkdir(exist_ok=True)
@@ -77,7 +81,8 @@ def run(cfg: PipelineConfig):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     compute_type = "float16" if device == "cuda" else "int8"
-
+    compute_type = "float32"
+    device = "cpu"
     print(f"[INFO] Device: {device}, compute_type: {compute_type}")
     print(f"[INFO] Audio: {audio_path}")
 
@@ -142,7 +147,8 @@ def run(cfg: PipelineConfig):
     # 8) Сохраняем результаты
     words_path = OUT_DIR / f"{base_name}.words.json"
     segments_path = OUT_DIR / f"{base_name}.segments.json"
-
+    cfg.paths.segments_file = segments_path
+    cfg.paths.segments_ru_file = OUT_DIR / f"{base_name}.segments.ru.json"
     print(f"[SAVE] Words → {words_path}")
     with open(words_path, "w", encoding="utf-8") as f:
         json.dump(words, f, ensure_ascii=False, indent=2)

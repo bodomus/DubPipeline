@@ -1,5 +1,6 @@
 project_name: "video_sample"
-input_video: "21035.mp4"
+input_video: "d:/projects/python/DubPipeline/tests/data/2.mp4"
+mode: "add"
 
 languages:
   src: "en"
@@ -8,12 +9,11 @@ languages:
 paths:
   workdir: "."                       # относительно папки проекта
   out_dir: "out"
-  input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/21035.mp4"
-  audio: "tests/data"
-  segments_json: "out/segments/21035.segments.json"
-  segments_ru_json: "out/segments/21035.segments.ru.json"
-  tts_segments_dir: "out/tts_ru_segments_aligned"
-  final_video: "out/21035.ru.muxed.mp4"
+  input_video: "d:/projects/python/DubPipeline/tests/data/2.mp4"
+  segments_json: "d:/projects/python/DubPipeline/tests/out/segments/2.segments.json"
+  segments_ru_json: "d:/projects/python/DubPipeline/tests/out/segments/2.segments.ru.json"
+  tts_segments_dir: "d:/projects/python/DubPipeline/tests/out/tts_ru_segments_aligned"
+  final_video: "d:/projects/python/DubPipeline/tests/out/2.ru.muxed.mp4"
 
 steps:
   extract_audio: true
