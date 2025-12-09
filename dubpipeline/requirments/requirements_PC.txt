@@ -1,0 +1,27 @@
+# --- PyTorch + CUDA 12.4 --- 
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchaudio==2.5.1+cu124
+# --- Whisper / WhisperX ---
+whisperx
+faster-whisper
+# --- Pyannote (диаризация/VAD) ---
+# ВАЖНО: pyannote.audio 4.x ломает whisperx, поэтому фиксируем 3.4.0
+# (это же рекомендуют в официальном issue whisperx)
+# см. https://github.com/m-bain/whisperX/issues/1241
+pyannote.audio==3.4.0
+# --- Audio / обработка ---
+ffmpeg-python==0.2.0
+soundfile==0.12.1
+# --- Утилиты ---
+numpy==2.0.2
+tqdm==4.66.4
+jinja2==3.1.6
+fsspec==2025.9.0
+# --- Для части функционала whisperX ---
+tokenizers>=0.15.0
+huggingface_hub>=0.23.0
+
+argostranslate
+urllib3<2

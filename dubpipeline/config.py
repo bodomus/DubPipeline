@@ -7,10 +7,6 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-from dubpipeline.load_config import load_config
-
-
-#from dubpipeline.load_config import load_config
 
 
 @dataclass
@@ -22,19 +18,17 @@ class StepsConfig:
     tts: bool = False
     merge: bool = False
 
-
 @dataclass
 class PathsConfig:
-    workdir: Path
-    input_video: Path
-    out_dir: Path
-    audio_wav: Path
-    segments_path: Path
-    segments_ru_path: Path
-    words_path:Path
-    segments_file:Path
-    segments_ru_file: Path
-    final_video:Path
+    workdir: Path #From which run app
+    input_video: Path #Full qualificated path to input video
+    out_dir: Path #Full qualificated path to output directory
+    audio_wav: Path #Full qualificated path to output audio from video one
+    segments_path: Path #Full qualificated path to output segments in English
+    segments_align_path: Path #Full qualificated path to output segments in Russian
+    segments_file:Path #Full qualificated path to output segments in English
+    segments_ru_file: Path #Full qualificated path to output segments in Russian
+    final_video:Path #Full qualificated path to output final video
 
 
 @dataclass
@@ -62,8 +56,8 @@ class PipelineConfig:
     ffmpeg: FfmpegConfig
     # режим добавления\вставки аудио
     mode:str
-
-
+    languages:str
+    usegpu:bool #usegpu
 
 def _get_nested(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
     cur: Any = d
@@ -84,6 +78,7 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
 
     with pipeline_file.open("r", encoding="utf-8") as f:
         raw_cfg: Dict[str, Any] = yaml.safe_load(f) or {}
+    use_gpu = raw_cfg.get("usegpu", "true")
 
     mode = raw_cfg.get("mode")
     if not mode:
@@ -102,6 +97,9 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         tts=bool(steps_dict.get("tts", False)),
         merge=bool(steps_dict.get("merge", False)),
     )
+
+    languages_dict:Dict[str, Any] = raw_cfg.get("languages", {}) or {}
+    languages: str = languages_dict.get("tgt", "ru")
 
     # --- Paths ---
     paths_dict: Dict[str, Any] = raw_cfg.get("paths", {}) or {}
@@ -126,6 +124,17 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     else:
         audio_wav = (workdir / audio_wav_str).resolve()
 
+    tts_segments_dir: Optional[str] = paths_dict.get("tts_segments_dir")
+    if not tts_segments_dir:
+        # По умолчанию out/<project_name>.wav
+        tts_segments_dir = out_dir
+
+    tts_segments_align_dir: Optional[str] = paths_dict.get("tts_segments_align_dir")
+    if not tts_segments_align_dir:
+        # По умолчанию out/<project_name>.wav
+        tts_segments_align_dir = out_dir
+
+
     final_video_str: Optional[str] = paths_dict.get("final_video")
 
     paths = PathsConfig(
@@ -133,11 +142,10 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         input_video=input_video,
         out_dir=out_dir,
         audio_wav=audio_wav,
-        segments_path=out_dir,
-        segments_ru_path=out_dir,
-        words_path=out_dir,
-        segments_file=out_dir,
-        segments_ru_file=out_dir,
+        segments_path=tts_segments_dir,
+        segments_align_path=tts_segments_align_dir,
+        segments_file=tts_segments_dir,
+        segments_ru_file=tts_segments_dir,
         final_video=final_video_str,
     )
 
@@ -158,6 +166,8 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         steps=steps,
         ffmpeg=ffmpeg,
         mode=mode,
+        usegpu=use_gpu,
+        languages='ru',
     )
 
 

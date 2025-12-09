@@ -40,7 +40,6 @@ def main() -> None:
             step_tts.run(cfg)
             step_align.run(cfg)
         if cfg.steps.merge:
-            step_mux_audio.run(cfg)
             step_merge_py.run(cfg)
         else:
             print("[dubpipeline] Шаг extract_audio отключён в конфиге.")

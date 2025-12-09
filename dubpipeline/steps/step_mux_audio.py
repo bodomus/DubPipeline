@@ -214,7 +214,7 @@ def mix_aligned_segments_to_timeline(
 def run(cfg:PipelineConfig):
     segments_path = cfg.paths.segments_ru_file
     tts_dir = Path("out/tts_ru_segments")
-    aligned_dir = Path("out/tts_ru_segments_aligned")
+    aligned_dir = Path(cfg.paths.segments_align_path)
     out_mix_path = cfg.paths.audio_wav
 
     print(f"[INFO] Loading segments from {segments_path}")

@@ -6,8 +6,6 @@ import pathlib
 
 import torch
 import whisperx
-from pathlib import Path
-
 
 # === НАСТРОЙКИ =================================================================
 
@@ -20,9 +18,6 @@ BATCH_SIZE = 1
 
 # Порог склейки слов в один сегмент (секунды)
 MAX_GAP_BETWEEN_WORDS = 0.8
-
-
-
 
 # === ВСПОМОГАТЕЛЬНАЯ ЛОГИКА ====================================================
 
@@ -69,6 +64,7 @@ def merge_words_to_segments(words, max_gap=0.8):
 # === ОСНОВНОЙ PIPELINE =========================================================
 
 def run(cfg:PipelineConfig):
+    #Создание json файла с английским текстом и временными метками.
     # Папка для результатов
     OUT_DIR = cfg.paths.out_dir
     OUT_DIR.mkdir(exist_ok=True)
@@ -79,10 +75,8 @@ def run(cfg:PipelineConfig):
 
     base_name = audio_path.stem
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    compute_type = "float16" if device == "cuda" else "int8"
-    compute_type = "float32"
-    device = "cpu"
+    device = "cuda" if torch.cuda.is_available() and cfg.usegpu else "cpu"
+    compute_type = "float16" if device == "cuda" else "int32"
     print(f"[INFO] Device: {device}, compute_type: {compute_type}")
     print(f"[INFO] Audio: {audio_path}")
 
@@ -145,13 +139,13 @@ def run(cfg:PipelineConfig):
     segments = merge_words_to_segments(words, max_gap=MAX_GAP_BETWEEN_WORDS)
 
     # 8) Сохраняем результаты
-    words_path = OUT_DIR / f"{base_name}.words.json"
+    #words_path = OUT_DIR / f"{base_name}.words.json"
     segments_path = OUT_DIR / f"{base_name}.segments.json"
     cfg.paths.segments_file = segments_path
     cfg.paths.segments_ru_file = OUT_DIR / f"{base_name}.segments.ru.json"
-    print(f"[SAVE] Words → {words_path}")
-    with open(words_path, "w", encoding="utf-8") as f:
-        json.dump(words, f, ensure_ascii=False, indent=2)
+    #print(f"[SAVE] Words → {words_path}")
+    #with open(words_path, "w", encoding="utf-8") as f:
+    #    json.dump(words, f, ensure_ascii=False, indent=2)
 
     print(f"[SAVE] Segments → {segments_path}")
     with open(segments_path, "w", encoding="utf-8") as f:

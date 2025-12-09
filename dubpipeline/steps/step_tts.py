@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+
 from argostranslate import package, translate
 import torch
 from TTS.api import TTS
@@ -7,12 +9,12 @@ from dubpipeline.config import PipelineConfig
 
 
 def run(cfg:PipelineConfig):
+    # Генерация русского аудио звука и запись его в wav файлы
     # --- НАСТРОЙКИ ---
     segments_path = cfg.paths.segments_ru_file
-    out_dir = cfg.paths.out_dir
+    out_dir = Path(cfg.paths.segments_path)
 
     model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
-    language = "ru"
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -65,7 +67,7 @@ def run(cfg:PipelineConfig):
         tts.tts_to_file(
             text=text_ru,
             file_path=str(out_wav),
-            language=language,
+            language=cfg.languages,
             speaker=default_speaker,
         )
 

@@ -4,11 +4,11 @@ from argostranslate import package, translate
 
 from dubpipeline.config import PipelineConfig
 
-
 def run(cfg:PipelineConfig):
+    # Создание json файла с английским и русским текстом и временными метками.
+
     ensure_argos_model_installed()
     translate_segments(cfg.paths.segments_file, cfg.paths.segments_ru_file)
-
 
 def ensure_argos_model_installed():
     """Устанавливает пакет EN→RU, если его ещё нет."""
@@ -52,11 +52,3 @@ def translate_segments(input_file, output_file):
 
     print(f"\n[OK] Переведено {len(translated)} сегментов.")
     print(f"[SAVE] {output_file}")
-
-
-
-
-#if __name__ == "__main__":
-#    ensure_argos_model_installed()
-#    translate_segments("J:\Projects\!!!AI\DubPipeline\out\\21305.segments.json",
-#                       "J:\Projects\!!!AI\DubPipeline\out\\21305.segments_translated.json")

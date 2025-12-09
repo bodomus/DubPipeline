@@ -123,8 +123,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(cfg:PipelineConfig) -> None:
-    args = parse_args()
-
     video = cfg.paths.input_video
     audio = cfg.paths.audio_wav
     out_path = cfg.paths.final_video
@@ -142,7 +140,7 @@ def run(cfg:PipelineConfig) -> None:
     if not audio.exists():
         raise SystemExit(f"Audio file not found: {audio}")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    #out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"[INFO] Video: {video}")
     print(f"[INFO] Audio (RU full): {audio}")
