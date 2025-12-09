@@ -1,0 +1,36 @@
+project_name: "2"
+input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4 "
+mode: "add"
+usegpu: true
+
+languages:
+  src: "en"
+  tgt: "ru"
+
+paths:
+  workdir: "."                       # относительно папки проекта
+  out_dir: "out"
+  input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4"
+  segments_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/2.segments.json"
+  segments_ru_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/2.segments.ru.json"
+  tts_segments_dir: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments"
+  tts_segments_align_dir: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments_aligned"
+  final_video: "J:/Projects/!!!AI/DubPipeline/tests/out/2.ru.muxed.mp4"
+
+steps:
+  extract_audio: true
+  asr_whisperx: true
+  translate: true
+  tts: true
+  merge: true
+
+tts:
+  voice: "some_local_tts_voice_id"
+  sample_rate: 22050
+
+ffmpeg:
+  audio_codec: "pcm_s16le"
+  audio_bitrate: "128k"
+  sample_rate: 16000
+  channels: 1
+

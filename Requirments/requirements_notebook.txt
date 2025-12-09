@@ -1,0 +1,32 @@
+# --- Core CUDA stack (PyTorch 2.6.0 + cu124) ---
+torch==2.8.0
+torchvision
+torchaudio
+
+# --- Whisper / WhisperX ---
+whisperx==3.7.4
+faster-whisper==1.1.1
+
+# --- Pyannote (диаризация + VAD) ---
+pyannote.audio
+
+# --- Audio / processing ---
+ffmpeg-python==0.2.0
+soundfile==0.12.1
+
+# --- System utilities ---
+numpy==2.0.2
+tqdm==4.66.4
+jinja2==3.1.6
+fsspec==2025.9.0
+
+# --- Optional (но нужны для некоторых частей whisperX) ---
+tokenizers>=0.15.0
+huggingface_hub>=0.23.0
+
+# --- Для части функционала whisperX ---
+tokenizers>=0.15.0
+huggingface_hub>=0.23.0
+
+argostranslate
+urllib3<2
