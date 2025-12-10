@@ -7,6 +7,13 @@ from TTS.api import TTS
 
 from dubpipeline.config import PipelineConfig
 
+model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def getVoices():
+    tts = TTS(model_name).to(device)
+    speakers = getattr(tts, "speakers", None)
+    return speakers
 
 def run(cfg:PipelineConfig):
     # Генерация русского аудио звука и запись его в wav файлы
@@ -14,11 +21,9 @@ def run(cfg:PipelineConfig):
     segments_path = cfg.paths.segments_ru_file
     out_dir = Path(cfg.paths.segments_path)
 
-    model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
-
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     print(f"[INFO] Using device: {device}")
 
     print(f"[INFO] Loading TTS model: {model_name}")
