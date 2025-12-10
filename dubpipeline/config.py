@@ -1,8 +1,10 @@
 from __future__ import annotations
+
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-from .yaml_parser import load_config
+from dubpipeline.yaml_parser import load_config
 from rich import print
 import yaml
 
@@ -74,6 +76,54 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         raw_cfg: Dict[str, Any] = yaml.safe_load(f) or {}
 
     return apply_config(raw_cfg, project_dir)
+
+def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
+    """
+    values — словарь из window.read()
+    pipeline_path — куда сохранить *.pipeline.yaml
+    """
+
+    # берём глубокую копию шаблона, чтобы его не портить
+    config = load_config(pipeline_path)
+    cfg = copy.deepcopy(config)
+
+    project_name = values["-PROJECT-"].strip()
+    input_video = values["-IN-"].strip()
+    voice = values["-VOICE-"]
+    usegpu = bool(values.get("-USEGPU-", True))
+
+    # заполняем верхний уровень
+    cfg["project_name"] = project_name
+    cfg["input_video"] = input_video
+    cfg["usegpu"] = usegpu
+
+    # языки (если хотите их менять из GUI)
+    src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
+    tgt_lang = values.get("-TGT_LANG-", cfg.get("languages", {}).get("tgt", "ru"))
+
+    cfg.setdefault("languages", {})
+    cfg["languages"]["src"] = src_lang
+    cfg["languages"]["tgt"] = tgt_lang
+
+    # голос TTS
+    cfg.setdefault("tts", {})
+    cfg["tts"]["voice"] = voice
+
+    # при желании можно обновить paths, завязав их на project_name
+    # пример: оставляем как в шаблоне, если он уже с {project_name}
+    # если нужно — можно добавить что-то вроде:
+    # base_out = values["-OUT-"].strip() or cfg["paths"]["out_dir"]
+    # cfg["paths"]["out_dir"] = base_out
+
+    # сохраняем YAML
+    pipeline_path = pipeline_path.resolve()
+    pipeline_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(pipeline_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+
+    return pipeline_path
+
 
 def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
