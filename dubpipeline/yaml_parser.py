@@ -26,7 +26,5 @@ def load_config(path: str) -> dict:
 
     return format_values(cfg)
 
-config = load_config("config.yaml")
+#config = load_config("config.yaml")
 
-print(config["paths"]["input_video"])      # lecture_01.mp4
-print(config["paths"]["segments_json"])    # out/segments/lecture_01.segments.json

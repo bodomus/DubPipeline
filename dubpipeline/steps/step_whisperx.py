@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from ..config import PipelineConfig
 
 import os
@@ -18,6 +20,8 @@ BATCH_SIZE = 1
 
 # Порог склейки слов в один сегмент (секунды)
 MAX_GAP_BETWEEN_WORDS = 0.8
+
+# OUTPUT_SRT = "out/video_sample.from_segments.en.srt"
 
 # === ВСПОМОГАТЕЛЬНАЯ ЛОГИКА ====================================================
 
@@ -81,7 +85,7 @@ def run(cfg:PipelineConfig):
     print(f"[INFO] Audio: {audio_path}")
 
     # 1) Загружаем аудио
-    audio = whisperx.load_audio(str(audio_path))
+    audio = whisperx.load_audio(str(audio_path), )
 
     # 2) ASR (Whisper / Faster-Whisper через whisperx)
     print("[STEP] Loading ASR model...")
@@ -90,6 +94,22 @@ def run(cfg:PipelineConfig):
     print("[STEP] Transcribing...")
     result = model.transcribe(audio, batch_size=BATCH_SIZE)
     # result["segments"] — фразовые сегменты (без выравнивания по словам)
+    segments = result["segments"]
+    print(f"Segments: {len(segments)}")
+    srt_file = cfg.paths.srt_file_en
+    with open(srt_file, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, start=1):
+            start = format_timestamp(seg["start"])
+            end = format_timestamp(seg["end"])
+            text = seg["text"].strip()
+
+            f.write(f"{i}\n")
+            f.write(f"{start} --> {end}\n")
+            f.write(f"{text}\n\n")
+
+    print("SRT saved to:", srt_file)
+
+
 
     # 3) Alignment (wav2vec2) для точных таймкодов
     print("[STEP] Loading alignment model...")
@@ -108,6 +128,9 @@ def run(cfg:PipelineConfig):
         return_char_alignments=False
     )
     # aligned_result["segments"][i]["words"] – слова с точными таймкодами
+
+
+
 
     print("[STEP] Running diarization (if available)...")
     with_speakers = run_diarization_safe(audio, aligned_result, device=device)
@@ -197,3 +220,15 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
             w["speaker"] = "SPEAKER_00"
 
     return aligned_result
+
+# 3. Сохраняем в SRT (без диаризации — пока)
+def format_timestamp(seconds: float) -> str:
+    td = timedelta(seconds=seconds)
+    # Приводим к формату HH:MM:SS,mmm
+    total_seconds = int(td.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    millis = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+

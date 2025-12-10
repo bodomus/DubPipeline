@@ -1,13 +1,10 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-#from yaml_parser import load_config
-
+from .yaml_parser import load_config
+from rich import print
 import yaml
-
-
 
 @dataclass
 class StepsConfig:
@@ -29,14 +26,13 @@ class PathsConfig:
     segments_file:Path #Full qualificated path to output segments in English
     segments_ru_file: Path #Full qualificated path to output segments in Russian
     final_video:Path #Full qualificated path to output final video
-
+    srt_file_en:Path #Full qualificated path to output srt file in English
 
 @dataclass
 class FfmpegConfig:
     sample_rate: int = 16_000
     channels: int = 1
     audio_codec: str = "pcm_s16le"
-
 
 @dataclass
 class PipelineConfig:
@@ -59,14 +55,12 @@ class PipelineConfig:
     languages:str
     usegpu:bool #usegpu
 
-def _get_nested(d: Dict[str, Any], *keys: str, default: Any = None) -> Any:
-    cur: Any = d
-    for k in keys:
-        if not isinstance(cur, dict) or k not in cur:
-            return default
-        cur = cur[k]
-    return cur
+def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
+    project_dir = pipeline_file.parent
 
+    config = load_config(pipeline_file)
+    print("[bold green]Load config_ex success...[/bold green]")
+    return apply_config(config, project_dir)
 
 def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     """Загрузить и провалидировать *.pipeline.yaml, вернуть PipelineConfig."""
@@ -78,15 +72,16 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
 
     with pipeline_file.open("r", encoding="utf-8") as f:
         raw_cfg: Dict[str, Any] = yaml.safe_load(f) or {}
+
+    return apply_config(raw_cfg, project_dir)
+
+def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
 
     mode = raw_cfg.get("mode")
     if not mode:
         mode="add"
     project_name = raw_cfg.get("project_name")
-    if not project_name:
-        # Если явно не задано, возьмём имя файла без суффикса
-        project_name = pipeline_file.stem
 
     # --- Steps ---
     steps_dict: Dict[str, Any] = raw_cfg.get("steps", {}) or {}
@@ -137,6 +132,13 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
 
     final_video_str: Optional[str] = paths_dict.get("final_video")
 
+    srt_file_en: Optional[str] = paths_dict.get("srt_file_en")
+    if not srt_file_en:
+        # По умолчанию считаем,
+        srt_file_en = (project_dir / f"{project_name}.srt").resolve()
+    else:
+        srt_file_en = (workdir / srt_file_en).resolve()
+
     paths = PathsConfig(
         workdir=workdir,
         input_video=input_video,
@@ -147,6 +149,7 @@ def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
         segments_file=tts_segments_dir,
         segments_ru_file=tts_segments_dir,
         final_video=final_video_str,
+        srt_file_en = srt_file_en,
     )
 
     # --- FFMPEG ---

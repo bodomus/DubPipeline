@@ -10,12 +10,13 @@ languages:
 paths:
   workdir: "."                       # относительно папки проекта
   out_dir: "out"
-  input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4"
-  segments_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/2.segments.json"
-  segments_ru_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/2.segments.ru.json"
+  input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/{project_name}.mp4"
+  segments_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/{project_name}.segments.json"
+  segments_ru_json: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/{project_name}.segments.ru.json"
+  srt_file_en: "J:/Projects/!!!AI/DubPipeline/tests/out/{project_name}.srt"
   tts_segments_dir: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments"
   tts_segments_align_dir: "J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments_aligned"
-  final_video: "J:/Projects/!!!AI/DubPipeline/tests/out/2.ru.muxed.mp4"
+  final_video: "J:/Projects/!!!AI/DubPipeline/tests/out/{project_name}.ru.muxed.mp4"
 
 steps:
   extract_audio: true
