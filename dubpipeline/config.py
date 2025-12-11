@@ -8,6 +8,15 @@ from dubpipeline.yaml_parser import load_config
 from rich import print
 import yaml
 
+SEGMENTS_JSON: "{out_dir}/{project_name}.segments.json"
+SEGMENTS_RU_JSON: "{out_dir}/{project_name}.segments.ru.json"
+SRT_FILE_EN: "{out_dir}/out/{project_name}.srt"
+TTS_SEGMENTS_DIR: "{out_dir}/out/segments/tts_ru_segments"
+TTS_SEGMENTS_ALIGN_DIR: "{out_dir}/out/segments/tts_ru_segments_aligned"
+FINAL_VIDEO: "{out_dir}/out/{project_name}.ru.muxed.mp4"
+
+
+
 @dataclass
 class StepsConfig:
     extract_audio: bool = True
@@ -88,6 +97,8 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg = copy.deepcopy(config)
 
     project_name = values["-PROJECT-"].strip()
+    out = values["-OUT-"].strip()
+
     input_video = values["-IN-"].strip()
     voice = values["-VOICE-"]
     usegpu = bool(values.get("-USEGPU-", True))
@@ -100,6 +111,16 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     # языки (если хотите их менять из GUI)
     src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
     tgt_lang = values.get("-TGT_LANG-", cfg.get("languages", {}).get("tgt", "ru"))
+
+    cfg.setdefault("paths", {})
+    d={"out_dir": out, "project_name": project_name}
+    cfg["paths"]["input_video"]=input_video
+    cfg["paths"]["segments_json"]=SEGMENTS_JSON.format(**d)
+    cfg["paths"]["segments_ru_json"]=SEGMENTS_RU_JSON.format(**d)
+    cfg["paths"]["srt_file_en"]=SRT_FILE_EN.format(**d)
+    cfg["paths"]["tts_segments_dir"]=TTS_SEGMENTS_DIR.format(**d)
+    cfg["paths"]["tts_segments_align_dir"]=TTS_SEGMENTS_ALIGN_DIR.format(**d)
+    cfg["paths"]["final_video"]=FINAL_VIDEO.format(**d)
 
     cfg.setdefault("languages", {})
     cfg["languages"]["src"] = src_lang

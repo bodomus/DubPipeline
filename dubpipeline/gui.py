@@ -123,6 +123,7 @@ def main():
             #pipeline_path = out_dir / f"{project_name}.pipeline.yaml"
 
             # 1) сохраняем YAML по данным из GUI
+            values["-PROJECT-"] = Path(input_path).stem
             pipeline_path = save_pipeline_yaml(values, TEMPLATE_PATH)
 
             # 2) запускаем dubpipeline.cli, передавая путь к YAML
