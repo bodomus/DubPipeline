@@ -39,7 +39,7 @@ def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg"
         "-c:a", "aac",
         "-shortest",
         "-metadata:s:a:0", "language=rus",
-        "-metadata:s:a:0", "title=Russian Dub",
+        "-metadata:s:a:0", "title=Russian_Dub",
         str(out_path),
     ]
     run_ffmpeg(cmd)
@@ -73,7 +73,7 @@ def mux_add(
         "-metadata:s:a:0", f"language={orig_lang}",
         "-metadata:s:a:0", "title=Original",
         "-metadata:s:a:1", "language=rus",
-        "-metadata:s:a:1", "title=Russian Dub",
+        "-metadata:s:a:1", "title=Russian_Dub",
         str(out_path),
     ]
     run_ffmpeg(cmd)
