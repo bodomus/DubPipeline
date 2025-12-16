@@ -171,7 +171,7 @@ def run(cfg:PipelineConfig):
     #with open(words_path, "w", encoding="utf-8") as f:
     #    json.dump(words, f, ensure_ascii=False, indent=2)
 
-    print(f"[bold yellow][SAVE] Segments → {segments_path}[/bold yellow]\n")
+    print(f"[bold yellow][SAVE] Segments → {segments_path}[/bold yellow]")
     with open(segments_path, "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
 

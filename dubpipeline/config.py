@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from dubpipeline.yaml_parser import load_config
 from rich import print
+from dubpipeline.utils.logging import info, step, warn, error
 import yaml
 
 SEGMENTS_JSON = "{out_dir}/{project_name}.segments.json"
@@ -68,7 +69,7 @@ def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
     project_dir = pipeline_file.parent
 
     config = load_config(pipeline_file)
-    print("[INFO] [bold green]Load config_ex success...[/bold green]\n")
+    info("[INFO] [bold green]Load config_ex success...[/bold green]\n")
     return apply_config(config, project_dir)
 
 def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:

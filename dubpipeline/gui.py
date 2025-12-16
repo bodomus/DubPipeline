@@ -10,7 +10,9 @@ import re
 
 from dubpipeline.config import save_pipeline_yaml
 from dubpipeline.steps.step_tts import getVoices
-from dubpipeline.utils.logging import info, step, warn, error
+
+from dubpipeline.utils.logging import step, info, warn, error
+
 
 USE_SUBPROCESS = True
 
@@ -34,27 +36,29 @@ LEVEL_COLORS = {
 
 
 def print_parsed_log(window, line: str) -> None:
-    """
-    Печатает одну строку лога в -LOGBOX- с цветом по уровню.
-    Если формат не подходит — выводим как есть.
-    """
-    m = LOG_LINE_RE.match(line)
+    # отладка
+    # print("PRINT_PARSED_LOG -LOG-", repr(line))
+    print("[DEBUG] print_parsed_log -LOG-", repr(line))
     ml = window["-LOGBOX-"]
 
-    if not m:
-        # просто сырая строка
-        ml.print(line)
+    # 1) пробуем распарсить наш формат [LEVEL] HH:MM:SS | msg
+    m = LOG_LINE_RE.match(line)
+    if m:
+        level = m.group("level").upper()
+        ts = m.group("time")
+        msg = m.group("msg")
+
+        color = LEVEL_COLORS.get(level, None)
+        text = f"[{ts}][{level}] {msg}"
+        ml.print(text, text_color=color)
         return
 
-    level = m.group("level").upper()
-    ts = m.group("time")
-    msg = m.group("msg")
-
-    color = LEVEL_COLORS.get(level, None)
-
-    # Как показывать: [HH:MM:SS][LEVEL] msg
-    text = f"[{ts}][{level}] {msg}"
-    ml.print(text, text_color=color)
+    # 2) если формат не наш — всё равно попробуем подсветить явные ошибки
+    lower = line.lower()
+    if "traceback" in lower or "error" in lower or "exception" in lower:
+        ml.print(line, text_color="red")
+    else:
+        ml.print(line)
 
 
 def run_pipeline(args_list, window):
@@ -204,6 +208,7 @@ def main():
             worker_thread.start()
 
         if event == "-LOG-":
+            info("CATCH -LOG-", repr(values["-LOG-"]))
             raw = values["-LOG-"]
             raw = raw.replace("\r", "\n")
 
