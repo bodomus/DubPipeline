@@ -41,7 +41,7 @@ def main() -> None:
         if cfg.steps.merge:
             step_merge_py.run(cfg)
         else:
-            print("[dubpipeline] Шаг extract_audio отключён в конфиге.")
+            print("[INFO] [dubpipeline] Шаг extract_audio отключён в конфиге.")
 
 
 if __name__ == "__main__":

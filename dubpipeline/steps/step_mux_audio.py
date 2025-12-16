@@ -78,7 +78,7 @@ def align_segments(
 
         diff = abs(cur_dur - target_dur)
         print(
-            f"[ALIGN] id={seg_id} target={target_dur:.3f}s "
+            f"[INFO] [ALIGN] id={seg_id} target={target_dur:.3f}s "
             f"cur={cur_dur:.3f}s diff={diff:.3f}s\n"
         )
 
@@ -89,7 +89,7 @@ def align_segments(
 
         factor = cur_dur / target_dur
         filter_str = build_atempo_filter(factor)
-        print(f"        atempo factor={factor:.4f} -> filter: {filter_str}\n")
+        print(f"[INFO]       atempo factor={factor:.4f} -> filter: {filter_str}\n")
 
         cmd = [
             ffmpeg_path,
@@ -115,7 +115,7 @@ def align_segments(
             print(result.stderr)
             # на всякий случай не падаем, а продолжаем
         else:
-            print(f"[OK] Aligned segment written: {out_wav}\n")
+            print(f"[INFO] [OK] Aligned segment written: {out_wav}\n")
 
 
 def mix_aligned_segments_to_timeline(
@@ -130,7 +130,7 @@ def mix_aligned_segments_to_timeline(
     """
     # Определим максимальный end, чтобы посчитать длину таймлайна
     max_end = max(float(seg["end"]) for seg in segments)
-    print(f"[MIX] Max end time: {max_end:.3f}s\n")
+    print(f"[INFO] [MIX] Max end time: {max_end:.3f}s\n")
 
     # Найдём первый существующий сегмент, чтобы узнать sr и кол-во каналов
     sr = None
@@ -175,7 +175,7 @@ def mix_aligned_segments_to_timeline(
         data, sr_tmp = sf.read(path)
         if sr_tmp != sr:
             raise RuntimeError(
-                f"Sample rate mismatch for segment {seg_id}: {sr_tmp} vs {sr}"
+                f"[ERROR] Sample rate mismatch for segment {seg_id}: {sr_tmp} vs {sr}"
             )
 
         if data.ndim == 1 and channels > 1:
@@ -199,7 +199,7 @@ def mix_aligned_segments_to_timeline(
             data = data[: end_idx - start_idx]
 
         print(
-            f"[MIX] Place seg {seg_id} at {start_idx}..{end_idx} "
+            f"[ERROR] [MIX] Place seg {seg_id} at {start_idx}..{end_idx} "
             f"({start:.3f}s–{start + len(data) / sr:.3f}s)\n"
         )
 

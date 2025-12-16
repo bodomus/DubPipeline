@@ -43,10 +43,10 @@ def run(cfg: PipelineConfig) -> None:
         str(output_wav),
     ]
 
-    print("[dubpipeline] extract_audio:")
-    print("  input :", input_video)
-    print("  output:", output_wav)
-    print("  cmd   :", " ".join(cmd))
+    print("[INFO] [dubpipeline] extract_audio:")
+    print("[INFO]  input :", input_video)
+    print("[INFO]  output:", output_wav)
+    print("[INFO]  cmd   :", " ".join(cmd))
 
     # Запуск ffmpeg, ошибки не глотаем
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -55,8 +55,8 @@ def run(cfg: PipelineConfig) -> None:
         print(proc.stdout)
         print(proc.stderr)
         raise RuntimeError(
-            f"ffmpeg завершился с ошибкой (код {proc.returncode})"
+            f"[ERROR] ffmpeg завершился с ошибкой (код {proc.returncode})"
         )
 
-    print("[dubpipeline] extract_audio: OK")
+    print("[INFO] [dubpipeline] extract_audio: OK")
 

@@ -6,9 +6,11 @@ from pathlib import Path
 
 import FreeSimpleGUI as sg
 import yaml
+import re
 
 from dubpipeline.config import save_pipeline_yaml
 from dubpipeline.steps.step_tts import getVoices
+from dubpipeline.utils.logging import info, step, warn, error
 
 USE_SUBPROCESS = True
 
@@ -16,12 +18,52 @@ TEMPLATE_PATH = Path(__file__).with_name("video.pipeline.yaml")
 with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
     BASE_CFG = yaml.safe_load(f)
 
+LOG_LINE_RE = re.compile(
+    r"^\[(?P<level>\w+)\]\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s+\|\s+"
+    r"(?P<msg>.*)$"
+)
+
+LEVEL_COLORS = {
+    "DEBUG": None,          # по умолчанию
+    "INFO":  None,
+    "STEP":  "yellow",
+    "WARN":  "orange",
+    "ERROR": "red",
+}
+
+
+def print_parsed_log(window, line: str) -> None:
+    """
+    Печатает одну строку лога в -LOGBOX- с цветом по уровню.
+    Если формат не подходит — выводим как есть.
+    """
+    m = LOG_LINE_RE.match(line)
+    ml = window["-LOGBOX-"]
+
+    if not m:
+        # просто сырая строка
+        ml.print(line)
+        return
+
+    level = m.group("level").upper()
+    ts = m.group("time")
+    msg = m.group("msg")
+
+    color = LEVEL_COLORS.get(level, None)
+
+    # Как показывать: [HH:MM:SS][LEVEL] msg
+    text = f"[{ts}][{level}] {msg}"
+    ml.print(text, text_color=color)
+
 
 def run_pipeline(args_list, window):
     """
     args_list, например: ["run", "D:/Projects/DubPipeline/out/myproj.pipeline.yaml"]
     Работает в отдельном потоке и шлёт события -LOG- и -DONE- в окно.
     """
+
+
     try:
         cmd = [sys.executable, "-u", "-m", "dubpipeline.cli"] + args_list
 
@@ -161,28 +203,16 @@ def main():
             )
             worker_thread.start()
 
-        elif event == "-LOG-":
+        if event == "-LOG-":
             raw = values["-LOG-"]
             raw = raw.replace("\r", "\n")
 
             for line in raw.splitlines():
                 if not line:
                     continue
+                print_parsed_log(window, line)
 
-                # Простая "раскраска" по префиксам
-                color = None
-                if line.startswith("[ERROR]"):
-                    color = "red"
-                elif line.startswith("[WARN]"):
-                    color = "orange"
-                elif line.startswith("[STEP]"):
-                    color = "yellow"
-                elif line.startswith("[INFO]"):
-                    color = "white"
-
-                window["-LOGBOX-"].print(line, text_color=color)
-
-        elif event == "-DONE-":
+        if event == "-DONE-":
             exit_code = values["-DONE-"]
             running = False
             status = "ok" if exit_code == 0 else f"error (code {exit_code})"
