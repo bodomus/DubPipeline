@@ -8,14 +8,12 @@ from dubpipeline.yaml_parser import load_config
 from rich import print
 import yaml
 
-SEGMENTS_JSON: "{out_dir}/{project_name}.segments.json"
-SEGMENTS_RU_JSON: "{out_dir}/{project_name}.segments.ru.json"
-SRT_FILE_EN: "{out_dir}/out/{project_name}.srt"
-TTS_SEGMENTS_DIR: "{out_dir}/out/segments/tts_ru_segments"
-TTS_SEGMENTS_ALIGN_DIR: "{out_dir}/out/segments/tts_ru_segments_aligned"
-FINAL_VIDEO: "{out_dir}/out/{project_name}.ru.muxed.mp4"
-
-
+SEGMENTS_JSON = "{out_dir}/{project_name}.segments.json"
+SEGMENTS_RU_JSON = "{out_dir}/{project_name}.segments.ru.json"
+SRT_FILE_EN = "{out_dir}/{project_name}.srt"
+TTS_SEGMENTS_DIR = "{out_dir}/segments/tts_ru_segments"
+TTS_SEGMENTS_ALIGN_DIR = "{out_dir}/segments/tts_ru_segments_aligned"
+FINAL_VIDEO = "{out_dir}/{project_name}.ru.muxed.mp4"
 
 @dataclass
 class StepsConfig:
@@ -70,7 +68,7 @@ def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
     project_dir = pipeline_file.parent
 
     config = load_config(pipeline_file)
-    print("[bold green]Load config_ex success...[/bold green]")
+    print("[bold green]Load config_ex success...[/bold green]\n")
     return apply_config(config, project_dir)
 
 def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:

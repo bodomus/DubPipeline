@@ -18,7 +18,7 @@ def run_ffmpeg(cmd: list[str]) -> None:
         print(result.stderr)
         raise SystemExit(result.returncode)
     else:
-        print("[OK] ffmpeg finished successfully")
+        print("[OK] ffmpeg finished successfully\n")
 
 
 def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg") -> None:
@@ -142,10 +142,10 @@ def run(cfg:PipelineConfig) -> None:
 
     #out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[INFO] Video: {video}")
-    print(f"[INFO] Audio (RU full): {audio}")
-    print(f"[INFO] Output: {out_path}")
-    print(f"[INFO] Mode: {cfg.mode}")
+    print(f"[INFO] Video: {video}\n")
+    print(f"[INFO] Audio (RU full): {audio}\n")
+    print(f"[INFO] Output: {out_path}\n")
+    print(f"[INFO] Mode: {cfg.mode}\n")
 
     if cfg.mode == "replace":
         mux_replace(video, audio, out_path, ffmpeg="eng")
