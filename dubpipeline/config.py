@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from dubpipeline.yaml_parser import load_config
 from rich import print
-from dubpipeline.utils.logging import info, step, warn, error
+from dubpipeline.utils.logging import info, step, warn, error, debug
 import yaml
 
 SEGMENTS_JSON = "{out_dir}/{project_name}.segments.json"
@@ -100,7 +100,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     input_video = values["-IN-"].strip()
     voice = values["-VOICE-"]
-    usegpu = bool(values.get("-USEGPU-", True))
+    usegpu = bool(values.get("-GPU-", True))
 
     # заполняем верхний уровень
     cfg["project_name"] = project_name

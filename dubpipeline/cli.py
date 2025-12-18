@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dubpipeline.utils.logging import info, step, warn, error, debug
 import argparse
 from pathlib import Path
 
@@ -41,7 +42,7 @@ def main() -> None:
         if cfg.steps.merge:
             step_merge_py.run(cfg)
         else:
-            print("[INFO] [dubpipeline] Шаг extract_audio отключён в конфиге.")
+            info("[dubpipeline] Шаг extract_audio отключён в конфиге.")
 
 
 if __name__ == "__main__":

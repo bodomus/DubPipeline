@@ -1,6 +1,6 @@
 import json
 from argostranslate import package, translate
-
+from dubpipeline.utils.logging import info, step, warn, error, debug
 
 from dubpipeline.config import PipelineConfig
 
@@ -17,13 +17,13 @@ def ensure_argos_model_installed():
         if p.from_code == "en" and p.to_code == "ru":
             return
 
-    print("[STEP] Скачивание модели EN→RU (Argos)…\n")
+    step("Скачивание модели EN→RU (Argos)…\n")
     available = package.get_available_packages()
     for p in available:
         if p.from_code == "en" and p.to_code == "ru":
             download_path = p.download()
             package.install_from_path(download_path)
-            print("[OK] Модель EN→RU установлена.\n")
+            info("[OK] Модель EN→RU установлена.\n")
             return
 
     raise RuntimeError("Не удалось скачать модель Argos EN→RU.")
@@ -45,10 +45,10 @@ def translate_segments(input_file, output_file):
 
         translated.append(seg_out)
 
-        print(f"[{idx}] {text} -> {text_ru}\n")
+        info(f"[{idx}] {text} -> {text_ru}\n")
 
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(translated, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[OK] Переведено {len(translated)} сегментов.\n")
-    print(f"[SAVE] {output_file}\n")
+    info(f"\n[OK] Переведено {len(translated)} сегментов.\n")
+    info(f"[SAVE] {output_file}\n")

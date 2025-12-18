@@ -3,10 +3,11 @@ import subprocess
 from pathlib import Path
 
 from dubpipeline.config import PipelineConfig
+from dubpipeline.utils.logging import info, step, warn, error, debug
 
 
 def run_ffmpeg(cmd: list[str]) -> None:
-    print("[FFMPEG]", " ".join(cmd))
+    info("[FFMPEG] {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -14,11 +15,11 @@ def run_ffmpeg(cmd: list[str]) -> None:
         text=True,
     )
     if result.returncode != 0:
-        print("[ERROR] ffmpeg failed")
-        print(result.stderr)
+        error("ffmpeg failed")
+        error(result.stderr)
         raise SystemExit(result.returncode)
     else:
-        print("[OK] ffmpeg finished successfully\n")
+        info("[OK] ffmpeg finished successfully\n")
 
 
 def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg") -> None:
@@ -142,10 +143,10 @@ def run(cfg:PipelineConfig) -> None:
 
     #out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"[INFO] Video: {video}\n")
-    print(f"[INFO] Audio (RU full): {audio}\n")
-    print(f"[INFO] Output: {out_path}\n")
-    print(f"[INFO] Mode: {cfg.mode}\n")
+    print(f"Video: {video}\n")
+    print(f"Audio (RU full): {audio}\n")
+    print(f"Output: {out_path}\n")
+    print(f"Mode: {cfg.mode}\n")
 
     if cfg.mode == "replace":
         mux_replace(video, audio, out_path, ffmpeg="eng")

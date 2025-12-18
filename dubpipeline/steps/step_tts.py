@@ -4,6 +4,7 @@ from pathlib import Path
 from argostranslate import package, translate
 import torch
 from TTS.api import TTS
+from dubpipeline.utils.logging import info, step, warn, error, debug
 
 from dubpipeline.config import PipelineConfig
 
@@ -24,16 +25,16 @@ def run(cfg:PipelineConfig):
     out_dir.mkdir(parents=True, exist_ok=True)
 
 
-    print(f"[INFO] Using device: {device}\n")
+    info(f"Using device: {device}\n")
 
-    print(f"[INFO] Loading TTS model: {model_name}\n")
+    info(f"Loading TTS model: {model_name}\n")
     tts = TTS(model_name).to(device)
 
     # --- Дебаг: какие вообще есть спикеры и языки ---
     speakers = getattr(tts, "speakers", None)
     languages = getattr(tts, "languages", None)
-    print("[INFO] Available speakers:\n", speakers)
-    print("[INFO] Available languages:\n", languages)
+    info("Available speakers:\n {speakers}")
+    info("Available languages:\n {languages}")
 
     if not speakers:
         raise RuntimeError(
@@ -42,10 +43,10 @@ def run(cfg:PipelineConfig):
         )
 
     default_speaker = speakers[0]
-    print(f"[INFO] Using default speaker: {default_speaker!r}\n")
+    info(f"Using default speaker: {default_speaker!r}\n")
 
     # --- ЗАГРУЗКА СЕГМЕНТОВ ---
-    print(f"[INFO] Loading segments from {segments_path}\n")
+    info(f"Loading segments from {segments_path}\n")
     with segments_path.open("r", encoding="utf-8") as f:
         segments = json.load(f)
 
@@ -57,16 +58,16 @@ def run(cfg:PipelineConfig):
         text_ru = (seg.get("text_ru") or "").strip()
 
         if not text_ru:
-            print(f"[WARN] Segment {seg_id} has empty 'text_ru', skipping\n")
+            warn(f"Segment {seg_id} has empty 'text_ru', skipping\n")
             continue
 
         out_wav = out_dir / f"seg_{seg_id:04d}.wav"
         if out_wav.exists():
-            print(f"[SKIP] {out_wav} already exists\n")
+            warn(f"[SKIP] {out_wav} already exists\n")
             continue
 
-        print(f"[TTS] id={seg_id}  {seg['start']:.2f}s–{seg['end']:.2f}s\n")
-        print(f"      RU: {text_ru}\n")
+        info(f"[TTS] id={seg_id}  {seg['start']:.2f}s–{seg['end']:.2f}s\n")
+        info(f"      RU: {text_ru}\n")
 
         # КЛЮЧЕВАЯ ЧАСТЬ: задаём и language, и speaker
         tts.tts_to_file(
@@ -76,4 +77,4 @@ def run(cfg:PipelineConfig):
             speaker=default_speaker,
         )
 
-    print("[DONE] Russian TTS segments generated in:\n", out_dir)
+    info("[DONE] Russian TTS segments generated in:\n {out_dir}")

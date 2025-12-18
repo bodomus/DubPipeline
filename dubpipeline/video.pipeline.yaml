@@ -1,37 +1,35 @@
-project_name: "2"
-input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4 "
-mode: "add"
-usegpu: true
-
+project_name: 12. World Creator Intro (Outro)
+input_video: D:/projects/python/DubPipeline/tests/data/12. World Creator Intro (Outro).mkv
+mode: add
+usegpu: false
 languages:
-  src: "en"
-  tgt: "ru"
-
+  src: en
+  tgt: ru
 paths:
-  workdir: "."                       # относительно папки проекта
-  out_dir: "out"
-  input_video: "J:/Projects/!!!AI/DubPipeline/tests/data/{project_name}.mp4"
-  segments_json: "{out_dir}/{project_name}.segments.json"
-  segments_ru_json: "{out_dir}/{project_name}.segments.ru.json"
-  srt_file_en: "{out_dir}/out/{project_name}.srt"
-  tts_segments_dir: "{out_dir}/out/segments/tts_ru_segments"
-  tts_segments_align_dir: "{out_dir}/out/segments/tts_ru_segments_aligned"
-  final_video: "{out_dir}/out/{project_name}.ru.muxed.mp4"
-
+  workdir: .
+  out_dir: out
+  input_video: D:/projects/python/DubPipeline/tests/data/12. World Creator Intro (Outro).mkv
+  segments_json: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
+    (Outro).segments.json
+  segments_ru_json: D:/projects/python/DubPipeline/tests/output/12. World Creator
+    Intro (Outro).segments.ru.json
+  srt_file_en: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
+    (Outro).srt
+  tts_segments_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments
+  tts_segments_align_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments_aligned
+  final_video: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
+    (Outro).ru.muxed.mp4
 steps:
   extract_audio: true
   asr_whisperx: true
   translate: true
   tts: true
   merge: true
-
 tts:
-  voice: "some_local_tts_voice_id"
+  voice: Claribel Dervla
   sample_rate: 22050
-
 ffmpeg:
-  audio_codec: "pcm_s16le"
-  audio_bitrate: "128k"
+  audio_codec: pcm_s16le
+  audio_bitrate: 128k
   sample_rate: 16000
   channels: 1
-

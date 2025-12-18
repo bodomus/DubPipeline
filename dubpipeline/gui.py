@@ -11,7 +11,7 @@ import re
 from dubpipeline.config import save_pipeline_yaml
 from dubpipeline.steps.step_tts import getVoices
 
-from dubpipeline.utils.logging import step, info, warn, error
+from dubpipeline.utils.logging import step, info, warn, error, debug
 
 
 USE_SUBPROCESS = True
@@ -21,16 +21,16 @@ with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
     BASE_CFG = yaml.safe_load(f)
 
 LOG_LINE_RE = re.compile(
-    r"^\[(?P<level>\w+)\]\s*"                # [LEVEL]
+    r"^\[(?P<level>\w+\s*)\]\s*"                # [LEVEL]
     r"(?:(?P<time>\d{2}:\d{2}:\d{2})\s*\|\s*)?"  # необязательное "HH:MM:SS | "
     r"(?P<msg>.*)$"                          # остальное — сообщение
 )
 
 
 LEVEL_COLORS = {
-    "DEBUG": None,          # по умолчанию
-    "INFO":  None,
-    "STEP":  "yellow",
+    "DEBUG": "darkblue",          # по умолчанию
+    "INFO":  "green",
+    "STEP":  "blue",
     "WARN":  "orange",
     "ERROR": "red",
 }
@@ -39,7 +39,7 @@ LEVEL_COLORS = {
 def print_parsed_log(window, line: str) -> None:
     # отладка
     # print("PRINT_PARSED_LOG -LOG-", repr(line))
-    print("[DEBUG] print_parsed_log -LOG-", repr(line))
+    debug(f"[DEBUG] print_parsed_log -LOG- {repr(line)}")
     ml = window["-LOGBOX-"]
 
     # 1) пробуем распарсить наш формат [LEVEL] HH:MM:SS | msg
@@ -149,7 +149,9 @@ def main():
 
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
-
+    window["-PROJECT-"].update("2")
+    window["-IN-"].update("D:/projects/python/DubPipeline/tests/data/2.mp4")
+    window["-OUT-"].update("D:/projects/python/DubPipeline/tests/output")
     running = False
 
     while True:
@@ -168,7 +170,9 @@ def main():
         # Выбор голоса (если надо, можно куда-то логировать)
         if event == "-VOICE-":
             current_voice = values["-VOICE-"]
-            window["-LOGBOX-"].print(f"[INFO] Выбран голос: {current_voice}")
+            line = info(f"Выбран голос: {current_voice}")
+            window.write_event_value("-LOG-", line)
+            #window["-LOGBOX-"].print(f"[INFO] Выбран голос: {current_voice}")
 
         if event == "-START-":
             if running:
@@ -194,7 +198,7 @@ def main():
             # (вы уже это сделали в своей реализации)
             pipeline_path = save_pipeline_yaml(values, TEMPLATE_PATH)
 
-            args = ["run", str(pipeline_path)]
+            args = ["run", pipeline_path]
 
             window["-LOGBOX-"].update("")  # очистить лог
             window["-STATUS-"].update("Статус: running")
@@ -206,7 +210,8 @@ def main():
             worker_thread.start()
 
         if event == "-LOG-":
-            info(f"CATCH -LOG-  {repr(values["-LOG-"])}")
+            str=repr(values[ "-LOG-"])
+            info(f"CATCH -LOG- {str}")
             raw = values["-LOG-"]
             raw = raw.replace("\r", "\n")
 

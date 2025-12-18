@@ -63,14 +63,14 @@ def align_segments(
         target_dur = end - start
 
         if target_dur <= 0:
-            warn(f"[WARN] Segment {seg_id} has non-positive duration, skipping")
+            warn(f"Segment {seg_id} has non-positive duration, skipping")
             continue
 
         in_wav = tts_dir / f"seg_{seg_id:04d}.wav"
         out_wav = aligned_dir / f"seg_{seg_id:04d}.wav"
 
         if not in_wav.exists():
-            warn(f"[WARN] TTS file not found for segment {seg_id}: {in_wav}")
+            warn(f"TTS file not found for segment {seg_id}: {in_wav}")
             continue
 
         # Читаем, чтобы узнать текущую длительность
@@ -112,11 +112,11 @@ def align_segments(
             text=True,
         )
         if result.returncode != 0:
-            error(f"[ERROR] ffmpeg failed for segment {seg_id}")
+            error(f"ffmpeg failed for segment {seg_id}")
             error(result.stderr)
             # на всякий случай не падаем, а продолжаем
         else:
-            info(f"[OK] Aligned segment written: {out_wav}")
+            info(f"Aligned segment written: {out_wav}")
 
 
 def mix_aligned_segments_to_timeline(
@@ -170,7 +170,7 @@ def mix_aligned_segments_to_timeline(
 
         path = aligned_dir / f"seg_{seg_id:04d}.wav"
         if not path.exists():
-            warn(f"[WARN] Aligned segment file missing, skipping: {path}")
+            warn(f"Aligned segment file missing, skipping: {path}")
             continue
 
         data, sr_tmp = sf.read(path)
@@ -187,8 +187,8 @@ def mix_aligned_segments_to_timeline(
         cur_dur = len(data) / sr
         diff = abs(cur_dur - target_dur)
         if diff > 2 * eps:
-            info(
-                f"[WARN] After alignment, segment {seg_id} duration differs from "
+            warn(
+                f"After alignment, segment {seg_id} duration differs from "
                 f"target by {diff:.3f}s (cur={cur_dur:.3f}, target={target_dur:.3f})"
             )
 
@@ -209,7 +209,7 @@ def mix_aligned_segments_to_timeline(
     # Записываем результат
     out_wav.parent.mkdir(parents=True, exist_ok=True)
     sf.write(out_wav, timeline, sr)
-    info(f"[DONE] Mixed timeline written to: {out_wav}")
+    info(f"Mixed timeline written to: {out_wav}")
 
 
 def run(cfg:PipelineConfig):
@@ -218,15 +218,15 @@ def run(cfg:PipelineConfig):
     aligned_dir = Path(cfg.paths.segments_align_path)
     out_mix_path = cfg.paths.audio_wav
 
-    info(f"[INFO] Loading segments from {segments_path}")
+    info(f"Loading segments from {segments_path}")
     with segments_path.open("r", encoding="utf-8") as f:
         segments = json.load(f)
 
     # сортируем по start на всякий случай
     segments = sorted(segments, key=lambda s: s["start"])
 
-    step("[STEP] Aligning segment durations...")
+    step("Aligning segment durations...")
     align_segments(segments, tts_dir, aligned_dir)
 
-    step("[STEP] Mixing aligned segments into single WAV...")
+    step("Mixing aligned segments into single WAV...")
     mix_aligned_segments_to_timeline(segments, aligned_dir, out_mix_path)

@@ -32,3 +32,6 @@ def warn(msg: str) -> None:
 
 def error(msg: str) -> None:
     log("ERROR", msg)
+
+def debug(msg: str) -> None:
+    log("DEBUG", msg)
