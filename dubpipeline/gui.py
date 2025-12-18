@@ -21,10 +21,11 @@ with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
     BASE_CFG = yaml.safe_load(f)
 
 LOG_LINE_RE = re.compile(
-    r"^\[(?P<level>\w+)\]\s+"
-    r"(?P<time>\d{2}:\d{2}:\d{2})\s+\|\s+"
-    r"(?P<msg>.*)$"
+    r"^\[(?P<level>\w+)\]\s*"                # [LEVEL]
+    r"(?:(?P<time>\d{2}:\d{2}:\d{2})\s*\|\s*)?"  # необязательное "HH:MM:SS | "
+    r"(?P<msg>.*)$"                          # остальное — сообщение
 )
+
 
 LEVEL_COLORS = {
     "DEBUG": None,          # по умолчанию
@@ -66,8 +67,6 @@ def run_pipeline(args_list, window):
     args_list, например: ["run", "D:/Projects/DubPipeline/out/myproj.pipeline.yaml"]
     Работает в отдельном потоке и шлёт события -LOG- и -DONE- в окно.
     """
-
-
     try:
         cmd = [sys.executable, "-u", "-m", "dubpipeline.cli"] + args_list
 
@@ -91,7 +90,6 @@ def run_pipeline(args_list, window):
     except Exception as e:
         window.write_event_value("-LOG-", f"[ERROR] {e}\n")
         window.write_event_value("-DONE-", 1)
-
 
 def main():
     sg.theme("SystemDefault")
@@ -208,7 +206,7 @@ def main():
             worker_thread.start()
 
         if event == "-LOG-":
-            info("CATCH -LOG-", repr(values["-LOG-"]))
+            info(f"CATCH -LOG-  {repr(values["-LOG-"])}")
             raw = values["-LOG-"]
             raw = raw.replace("\r", "\n")
 
