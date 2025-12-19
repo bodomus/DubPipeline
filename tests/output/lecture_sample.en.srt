@@ -1,4 +1,0 @@
-1
-00:00:00,031 --> 00:00:05,144
-okay so let's get the simple navigation out of the way where you actually gonna have your mouse
-

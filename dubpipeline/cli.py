@@ -1,12 +1,11 @@
 from __future__ import annotations
-
+from dubpipeline.utils.logging import info, step, warn, error, debug
 import argparse
 from pathlib import Path
 
-from .config import load_pipeline_config
+from .config import load_pipeline_config, load_pipeline_config_ex
 from dubpipeline.steps import step_whisperx, step_translate, step_tts, step_align, step_mux_audio, step_merge_py
 from .steps import step_extract_audio
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -26,7 +25,8 @@ def main() -> None:
     args = parser.parse_args()
 
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
-    cfg = load_pipeline_config(pipeline_path)
+    cfg = load_pipeline_config_ex(pipeline_path)
+    #cfg = load_pipeline_config(pipeline_path)
 
     if args.command == "run":
         # Пока реализован только шаг extract_audio.
@@ -42,7 +42,7 @@ def main() -> None:
         if cfg.steps.merge:
             step_merge_py.run(cfg)
         else:
-            print("[dubpipeline] Шаг extract_audio отключён в конфиге.")
+            info("[dubpipeline] Шаг extract_audio отключён в конфиге.")
 
 
 if __name__ == "__main__":

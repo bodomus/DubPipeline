@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from ..config import PipelineConfig
 
 import os
@@ -6,6 +8,8 @@ import pathlib
 
 import torch
 import whisperx
+from rich import print
+from dubpipeline.utils.logging import info, step, warn, error, debug
 
 # === НАСТРОЙКИ =================================================================
 
@@ -18,6 +22,8 @@ BATCH_SIZE = 1
 
 # Порог склейки слов в один сегмент (секунды)
 MAX_GAP_BETWEEN_WORDS = 0.8
+
+# OUTPUT_SRT = "out/video_sample.from_segments.en.srt"
 
 # === ВСПОМОГАТЕЛЬНАЯ ЛОГИКА ====================================================
 
@@ -76,29 +82,43 @@ def run(cfg:PipelineConfig):
     base_name = audio_path.stem
 
     device = "cuda" if torch.cuda.is_available() and cfg.usegpu else "cpu"
-    compute_type = "float16" if device == "cuda" else "int32"
-    print(f"[INFO] Device: {device}, compute_type: {compute_type}")
-    print(f"[INFO] Audio: {audio_path}")
+    compute_type = "float16" if device == "cuda" else "int8"
+    info(f"[bold green]Device: {device}, compute_type: {compute_type}[/bold green]\n")
+    info(f"[bold green]Audio: {audio_path}[/bold green]\n")
 
     # 1) Загружаем аудио
-    audio = whisperx.load_audio(str(audio_path))
+    audio = whisperx.load_audio(str(audio_path), )
 
     # 2) ASR (Whisper / Faster-Whisper через whisperx)
-    print("[STEP] Loading ASR model...")
+    step("[bold magenta]Loading ASR model...[/bold magenta]\n")
     model = whisperx.load_model(MODEL_NAME, device, compute_type=compute_type)
 
-    print("[STEP] Transcribing...")
+    step("[bold magenta]Transcribing...[/bold magenta]\n")
     result = model.transcribe(audio, batch_size=BATCH_SIZE)
     # result["segments"] — фразовые сегменты (без выравнивания по словам)
+    segments = result["segments"]
+    info(f"[bold yellow]Segments: {len(segments)}[/bold yellow]\n")
+    srt_file = cfg.paths.srt_file_en
+    with open(srt_file, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, start=1):
+            start = format_timestamp(seg["start"])
+            end = format_timestamp(seg["end"])
+            text = seg["text"].strip()
+
+            f.write(f"{i}\n")
+            f.write(f"{start} --> {end}\n")
+            f.write(f"{text}\n\n")
+
+    info(f"[bold green]SRT saved to:[/bold green] {srt_file}")
 
     # 3) Alignment (wav2vec2) для точных таймкодов
-    print("[STEP] Loading alignment model...")
+    step("[bold magenta]Loading alignment model...[/bold magenta]\n")
     model_a, metadata = whisperx.load_align_model(
         language_code=result["language"],
         device=device
     )
 
-    print("[STEP] Aligning...")
+    step("[bold magenta]Aligning...[/bold magenta]\n")
     aligned_result = whisperx.align(
         result["segments"],
         model_a,
@@ -109,7 +129,7 @@ def run(cfg:PipelineConfig):
     )
     # aligned_result["segments"][i]["words"] – слова с точными таймкодами
 
-    print("[STEP] Running diarization (if available)...")
+    step("[bold magenta][STEP] Running diarization (if available)...[/bold magenta]\n")
     with_speakers = run_diarization_safe(audio, aligned_result, device=device)
 
     # with_speakers["segments"] — список сегментов, внутри "words" со speaker/…
@@ -135,7 +155,7 @@ def run(cfg:PipelineConfig):
             })
 
     # 7) Склеиваем слова в более крупные сегменты по спикеру + паузам
-    print("[STEP] Merging words to segments...")
+    step("[bold magenta][STEP] Merging words to segments...[/bold magenta]\n")
     segments = merge_words_to_segments(words, max_gap=MAX_GAP_BETWEEN_WORDS)
 
     # 8) Сохраняем результаты
@@ -147,11 +167,11 @@ def run(cfg:PipelineConfig):
     #with open(words_path, "w", encoding="utf-8") as f:
     #    json.dump(words, f, ensure_ascii=False, indent=2)
 
-    print(f"[SAVE] Segments → {segments_path}")
+    info(f"[bold yellow][SAVE] Segments → {segments_path}[/bold yellow]")
     with open(segments_path, "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
 
-    print("[DONE] Готово. Теперь у вас есть words.json и segments.json")
+    info("[bold green][DONE] Готово. Теперь у вас есть words.json и segments.json[/bold green]\n")
 
 def run_diarization_safe(audio, aligned_result, device="cpu"):
     """
@@ -163,7 +183,7 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
     try:
         # Новый API (GitHub-версия): DiarizationPipeline
         if hasattr(whisperx, "DiarizationPipeline"):
-            print("[STEP] Running diarization via DiarizationPipeline...")
+            step("Running diarization via DiarizationPipeline...\n")
             diarize_model = whisperx.DiarizationPipeline(
                 device=device,
                 use_auth_token=hf_token
@@ -174,7 +194,7 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
 
         # Возможный старый API (на всякий случай, если он есть в вашей версии)
         if hasattr(whisperx, "load_diarization_model"):
-            print("[STEP] Running diarization via load_diarization_model...")
+            step("[bold magenta][STEP] Running diarization via load_diarization_model...[/bold magenta]\n")
             diarize_model = whisperx.load_diarization_model(
                 device=device,
                 use_auth_token=hf_token
@@ -183,12 +203,12 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
             result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
             return result
 
-        print("[WARN] В установленной версии whisperx нет DiarizationPipeline/load_diarization_model.")
-        print("[WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.")
+        warn("[bold blue][WARN] В установленной версии whisperx нет DiarizationPipeline/load_diarization_model.[/bold blue]\n")
+        warn("[bold blue][WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.[/bold blue]\n")
 
     except Exception as e:
-        print(f"[WARN] Diarization failed: {e}")
-        print("[WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.")
+        error(f"[bold blue][WARN] Diarization failed: {e}[/bold blue]\n")
+        error("[bold blue][WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.[/bold blue]\n")
 
     # --- Fallback: один спикер для всего аудио ---
     for seg in aligned_result.get("segments", []):
@@ -197,3 +217,15 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
             w["speaker"] = "SPEAKER_00"
 
     return aligned_result
+
+# 3. Сохраняем в SRT (без диаризации — пока)
+def format_timestamp(seconds: float) -> str:
+    td = timedelta(seconds=seconds)
+    # Приводим к формату HH:MM:SS,mmm
+    total_seconds = int(td.total_seconds())
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    millis = int((seconds - int(seconds)) * 1000)
+    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+

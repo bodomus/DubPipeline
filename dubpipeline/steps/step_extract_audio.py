@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from ..config import PipelineConfig
+from dubpipeline.utils.logging import info, step, warn, error, debug
 
 
 def run(cfg: PipelineConfig) -> None:
@@ -43,20 +44,20 @@ def run(cfg: PipelineConfig) -> None:
         str(output_wav),
     ]
 
-    print("[dubpipeline] extract_audio:")
-    print("  input :", input_video)
-    print("  output:", output_wav)
-    print("  cmd   :", " ".join(cmd))
+    info(f"[dubpipeline] extract_audio:")
+    info(f"input : {input_video}")
+    info(f"output: {output_wav}")
+    info(f"cmd   : {' '.join(cmd)}")
 
     # Запуск ffmpeg, ошибки не глотаем
     proc = subprocess.run(cmd, capture_output=True, text=True)
 
     if proc.returncode != 0:
-        print(proc.stdout)
-        print(proc.stderr)
+        error(proc.stdout)
+        error(proc.stderr)
         raise RuntimeError(
-            f"ffmpeg завершился с ошибкой (код {proc.returncode})"
+            f"[ERROR] ffmpeg завершился с ошибкой (код {proc.returncode})"
         )
 
-    print("[dubpipeline] extract_audio: OK")
+    info("[dubpipeline] extract_audio: OK")
 
