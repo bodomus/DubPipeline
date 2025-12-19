@@ -1,25 +1,25 @@
-project_name: 12. World Creator Intro (Outro)
-input_video: D:/projects/python/DubPipeline/tests/data/12. World Creator Intro (Outro).mkv
+project_name: 05. Wind — Break Your Crayons
+input_video: J:/Projects/!!!AI/DubPipeline/tests/data/05. Wind — Break Your Crayons.mp4
 mode: add
-usegpu: false
-
+usegpu: true
+deleteSRT: true
+rebuild: false
 languages:
   src: en
   tgt: ru
 paths:
   workdir: .
   out_dir: out
-  input_video: D:/projects/python/DubPipeline/tests/data/12. World Creator Intro (Outro).mkv
-  segments_json: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
-    (Outro).segments.json
-  segments_ru_json: D:/projects/python/DubPipeline/tests/output/12. World Creator
-    Intro (Outro).segments.ru.json
-  srt_file_en: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
-    (Outro).srt
-  tts_segments_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments
-  tts_segments_align_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments_aligned
-  final_video: D:/projects/python/DubPipeline/tests/output/12. World Creator Intro
-    (Outro).ru.muxed.mp4
+  input_video: J:/Projects/!!!AI/DubPipeline/tests/data/05. Wind — Break Your Crayons.mp4
+  audio_wav: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.wav
+  segments_json: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your
+    Crayons.segments.json
+  segments_ru_json: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your
+    Crayons.segments.ru.json
+  srt_file_en: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.srt
+  tts_segments_dir: J:/Projects/!!!AI/DubPipeline/tests/output/segments/tts_ru_segments
+  tts_segments_align_dir: J:/Projects/!!!AI/DubPipeline/tests/output/segments/tts_ru_segments_aligned
+  final_video: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.ru.muxed.mp4
 steps:
   extract_audio: true
   asr_whisperx: true

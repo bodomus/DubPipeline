@@ -2,6 +2,7 @@ from __future__ import annotations
 from dubpipeline.utils.logging import info, step, warn, error, debug
 import argparse
 from pathlib import Path
+import os
 
 from .config import load_pipeline_config, load_pipeline_config_ex
 from dubpipeline.steps import step_whisperx, step_translate, step_tts, step_align, step_mux_audio, step_merge_py
@@ -26,9 +27,16 @@ def main() -> None:
 
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
     cfg = load_pipeline_config_ex(pipeline_path)
-    #cfg = load_pipeline_config(pipeline_path)
+    cfg.deleteSRT
 
     if args.command == "run":
+
+        if (cfg.rebuild==True):
+            if os.path.exists(cfg.paths.srt_file_en):
+                os.remove(cfg.paths.srt_file_en)
+            if os.path.exists(Path(cfg.paths.segments_path)):
+                os.remove(Path(cfg.paths.segments_path))
+
         # Пока реализован только шаг extract_audio.
         if cfg.steps.extract_audio:
             step_extract_audio.run(cfg)
@@ -43,7 +51,9 @@ def main() -> None:
             step_merge_py.run(cfg)
         else:
             info("[dubpipeline] Шаг extract_audio отключён в конфиге.")
-
+        if (cfg.deleteSRT==True):
+            os.remove(cfg.paths.srt_file_en)
 
 if __name__ == "__main__":
     main()
+

@@ -15,6 +15,7 @@ SRT_FILE_EN = "{out_dir}/{project_name}.srt"
 TTS_SEGMENTS_DIR = "{out_dir}/segments/tts_ru_segments"
 TTS_SEGMENTS_ALIGN_DIR = "{out_dir}/segments/tts_ru_segments_aligned"
 FINAL_VIDEO = "{out_dir}/{project_name}.ru.muxed.mp4"
+AUDIO_WAV = "{out_dir}/{project_name}.wav"
 
 @dataclass
 class StepsConfig:
@@ -24,6 +25,7 @@ class StepsConfig:
     translate: bool = False
     tts: bool = False
     merge: bool = False
+    deleteSRT: bool = False
 
 @dataclass
 class PathsConfig:
@@ -64,6 +66,8 @@ class PipelineConfig:
     mode:str
     languages:str
     usegpu:bool #usegpu
+    deleteSRT: bool
+    rebuild:bool
 
 def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
     project_dir = pipeline_file.parent
@@ -97,7 +101,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     project_name = values["-PROJECT-"].strip()
     out = values["-OUT-"].strip()
-
+    rebuild=values["-REBUILD-"]
     input_video = values["-IN-"].strip()
     voice = values["-VOICE-"]
     usegpu = bool(values.get("-GPU-", True))
@@ -106,6 +110,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["project_name"] = project_name
     cfg["input_video"] = input_video
     cfg["usegpu"] = usegpu
+    cfg["rebuild"] = rebuild
 
     # языки (если хотите их менять из GUI)
     src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
@@ -120,6 +125,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["paths"]["tts_segments_dir"]=TTS_SEGMENTS_DIR.format(**d)
     cfg["paths"]["tts_segments_align_dir"]=TTS_SEGMENTS_ALIGN_DIR.format(**d)
     cfg["paths"]["final_video"]=FINAL_VIDEO.format(**d)
+    cfg["paths"]["audio_wav"]=AUDIO_WAV.format(**d)
 
     cfg.setdefault("languages", {})
     cfg["languages"]["src"] = src_lang
@@ -147,6 +153,8 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
 def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
+    deleteSRT = raw_cfg.get("deleteSRT", "true")
+    rebuild = raw_cfg.get("rebuild", "true")
 
     mode = raw_cfg.get("mode")
     if not mode:
@@ -198,7 +206,8 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     if not tts_segments_align_dir:
         # По умолчанию out/<project_name>.wav
         tts_segments_align_dir = out_dir
-
+    segments_json: Optional[str] = paths_dict.get("segments_json")
+    segments_ru_json: Optional[str] = paths_dict.get("segments_ru_json")
 
     final_video_str: Optional[str] = paths_dict.get("final_video")
 
@@ -216,8 +225,8 @@ def apply_config(raw_cfg: Dict, project_dir:str):
         audio_wav=audio_wav,
         segments_path=tts_segments_dir,
         segments_align_path=tts_segments_align_dir,
-        segments_file=tts_segments_dir,
-        segments_ru_file=tts_segments_dir,
+        segments_file=segments_json,
+        segments_ru_file=segments_ru_json,
         final_video=final_video_str,
         srt_file_en = srt_file_en,
     )
@@ -241,6 +250,8 @@ def apply_config(raw_cfg: Dict, project_dir:str):
         mode=mode,
         usegpu=use_gpu,
         languages='ru',
+        deleteSRT=deleteSRT,
+        rebuild=rebuild,
     )
 
 

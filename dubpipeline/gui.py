@@ -45,7 +45,7 @@ def print_parsed_log(window, line: str) -> None:
     # 1) пробуем распарсить наш формат [LEVEL] HH:MM:SS | msg
     m = LOG_LINE_RE.match(line)
     if m:
-        level = m.group("level").upper()
+        level = m.group("level").upper().strip()
         ts = m.group("time")
         msg = m.group("msg")
 
@@ -150,8 +150,9 @@ def main():
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
     window["-PROJECT-"].update("2")
-    window["-IN-"].update("D:/projects/python/DubPipeline/tests/data/2.mp4")
-    window["-OUT-"].update("D:/projects/python/DubPipeline/tests/output")
+    window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
+    window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/out")
+    window["-GPU-"].update(True)
     running = False
 
     while True:
@@ -181,6 +182,7 @@ def main():
 
             input_path = values["-IN-"].strip()
             output_dir = values["-OUT-"].strip()
+            rebuild = values["-REBUILD-"]
 
             if not input_path or not os.path.isfile(input_path):
                 sg.popup_error("Укажите корректный путь к входному видео.")

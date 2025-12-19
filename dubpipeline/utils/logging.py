@@ -14,6 +14,7 @@ def log(level: str, msg: str) -> None:
     ts = time.strftime("%H:%M:%S")
     # единый формат:
     # [LEVEL] HH:MM:SS | message
+    level=level.strip()
     line = f"[{level:5}] {ts} | {msg}"
     print(line, flush=True, file=sys.stdout)
 
