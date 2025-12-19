@@ -2,6 +2,7 @@ project_name: 12. World Creator Intro (Outro)
 input_video: D:/projects/python/DubPipeline/tests/data/12. World Creator Intro (Outro).mkv
 mode: add
 usegpu: false
+
 languages:
   src: en
   tgt: ru
