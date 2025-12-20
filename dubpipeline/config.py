@@ -17,6 +17,8 @@ TTS_SEGMENTS_ALIGN_DIR = "{out_dir}/segments/tts_ru_segments_aligned"
 FINAL_VIDEO = "{out_dir}/{project_name}.ru.muxed.mp4"
 AUDIO_WAV = "{out_dir}/{project_name}.wav"
 
+pipeline_path = Path(__file__).parent / "video.pipeline.yaml"
+
 @dataclass
 class StepsConfig:
     extract_audio: bool = True
@@ -39,6 +41,11 @@ class PathsConfig:
     segments_ru_file: Path #Full qualificated path to output segments in Russian
     final_video:Path #Full qualificated path to output final video
     srt_file_en:Path #Full qualificated path to output srt file in English
+
+@dataclass
+class TtsConfig:
+    voice: str = ""
+    sample_rate: int = 22_050
 
 @dataclass
 class FfmpegConfig:
@@ -68,6 +75,12 @@ class PipelineConfig:
     usegpu:bool #usegpu
     deleteSRT: bool
     rebuild:bool
+    tts: TtsConfig
+
+
+def get_voice()->str:
+    cfg = load_pipeline_config_ex(pipeline_path)
+    return cfg.tts.voice
 
 def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
     project_dir = pipeline_file.parent
@@ -111,6 +124,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["input_video"] = input_video
     cfg["usegpu"] = usegpu
     cfg["rebuild"] = rebuild
+    #cfg["voice"] = voice
 
     # языки (если хотите их менять из GUI)
     src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
@@ -134,6 +148,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     # голос TTS
     cfg.setdefault("tts", {})
     cfg["tts"]["voice"] = voice
+    cfg["tts"]["sample_rate"] = 22050
 
     # при желании можно обновить paths, завязав их на project_name
     # пример: оставляем как в шаблоне, если он уже с {project_name}
@@ -160,6 +175,13 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     if not mode:
         mode="add"
     project_name = raw_cfg.get("project_name")
+
+    #TTS
+    tts_dict: Dict[str, Any] = raw_cfg.get("tts", {}) or {}
+    tts = TtsConfig(
+        voice=tts_dict.get("voice", ""),
+        sample_rate = tts_dict.get("sample_rate", 22050)
+    )
 
     # --- Steps ---
     steps_dict: Dict[str, Any] = raw_cfg.get("steps", {}) or {}
@@ -246,6 +268,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
         project_dir=project_dir,
         paths=paths,
         steps=steps,
+        tts=tts,
         ffmpeg=ffmpeg,
         mode=mode,
         usegpu=use_gpu,

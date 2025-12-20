@@ -47,7 +47,7 @@ def run(cfg:PipelineConfig):
 
     # --- ЗАГРУЗКА СЕГМЕНТОВ ---
     info(f"Loading segments from {segments_path}\n")
-    with segments_path.open("r", encoding="utf-8") as f:
+    with Path(segments_path).open("r", encoding="utf-8") as f:
         segments = json.load(f)
 
     segments = sorted(segments, key=lambda s: s["start"])

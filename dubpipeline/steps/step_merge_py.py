@@ -7,7 +7,7 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 
 
 def run_ffmpeg(cmd: list[str]) -> None:
-    info("[FFMPEG] {' '.join(cmd)}")
+    info(f"[FFMPEG] {' '.join(cmd)}")
     result = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,

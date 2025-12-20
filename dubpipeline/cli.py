@@ -54,6 +54,7 @@ def main() -> None:
         if (cfg.deleteSRT==True):
             os.remove(cfg.paths.srt_file_en)
 
+
 if __name__ == "__main__":
     main()
 

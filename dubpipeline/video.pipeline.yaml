@@ -1,7 +1,7 @@
-project_name: 05. Wind — Break Your Crayons
-input_video: J:/Projects/!!!AI/DubPipeline/tests/data/05. Wind — Break Your Crayons.mp4
+project_name: '2'
+input_video: D:/projects/python/DubPipeline/tests/data/2.mkv
 mode: add
-usegpu: true
+usegpu: false
 deleteSRT: true
 rebuild: false
 languages:
@@ -10,16 +10,14 @@ languages:
 paths:
   workdir: .
   out_dir: out
-  input_video: J:/Projects/!!!AI/DubPipeline/tests/data/05. Wind — Break Your Crayons.mp4
-  audio_wav: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.wav
-  segments_json: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your
-    Crayons.segments.json
-  segments_ru_json: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your
-    Crayons.segments.ru.json
-  srt_file_en: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.srt
-  tts_segments_dir: J:/Projects/!!!AI/DubPipeline/tests/output/segments/tts_ru_segments
-  tts_segments_align_dir: J:/Projects/!!!AI/DubPipeline/tests/output/segments/tts_ru_segments_aligned
-  final_video: J:/Projects/!!!AI/DubPipeline/tests/output/05. Wind — Break Your Crayons.ru.muxed.mp4
+  input_video: D:/projects/python/DubPipeline/tests/data/2.mkv
+  audio_wav: D:/projects/python/DubPipeline/tests/output/segments/2.wav
+  segments_json: D:/projects/python/DubPipeline/tests/output/segments/2.segments.json
+  segments_ru_json: D:/projects/python/DubPipeline/tests/output/segments/2.segments.ru.json
+  srt_file_en: D:/projects/python/DubPipeline/tests/output/segments/2.srt
+  tts_segments_dir: D:/projects/python/DubPipeline/tests/output/segments/segments/tts_ru_segments
+  tts_segments_align_dir: D:/projects/python/DubPipeline/tests/output/segments/segments/tts_ru_segments_aligned
+  final_video: D:/projects/python/DubPipeline/tests/output/segments/2.ru.muxed.mp4
 steps:
   extract_audio: true
   asr_whisperx: true
@@ -27,7 +25,7 @@ steps:
   tts: true
   merge: true
 tts:
-  voice: Claribel Dervla
+  voice: Adde Michal
   sample_rate: 22050
 ffmpeg:
   audio_codec: pcm_s16le
