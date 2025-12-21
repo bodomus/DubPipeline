@@ -42,7 +42,8 @@ def run(cfg:PipelineConfig):
             "Нужно либо обновить coqui-tts, либо использовать speaker_wav."
         )
 
-    default_speaker = speakers[0]
+    default_speaker = cfg.tts.voice if cfg.tts.voice is not None else speakers[0]
+
     info(f"Using default speaker: {default_speaker!r}\n")
 
     # --- ЗАГРУЗКА СЕГМЕНТОВ ---
