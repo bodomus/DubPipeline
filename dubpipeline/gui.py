@@ -116,7 +116,7 @@ def main():
          sg.FolderBrowse("...")],
 
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
-        [sg.Checkbox("Генерировать субтитры?", key="-SRT-")],
+        [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
         [sg.Checkbox("Перегенерировать все шаги (игнорировать кэш)", key="-REBUILD-")],
 
         [sg.Text("Доп. аргументы CLI (опционально):")],

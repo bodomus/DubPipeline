@@ -33,8 +33,8 @@ def run(cfg:PipelineConfig):
     # --- Дебаг: какие вообще есть спикеры и языки ---
     speakers = getattr(tts, "speakers", None)
     languages = getattr(tts, "languages", None)
-    info("Available speakers:\n {speakers}")
-    info("Available languages:\n {languages}")
+    info(f"Available speakers:\n {speakers}")
+    info(f"Available languages:\n {languages}")
 
     if not speakers:
         raise RuntimeError(
@@ -76,6 +76,7 @@ def run(cfg:PipelineConfig):
             file_path=str(out_wav),
             language=cfg.languages,
             speaker=default_speaker,
+            split_sentences=True,
         )
 
-    info("[DONE] Russian TTS segments generated in:\n {out_dir}")
+    info("f[DONE] Russian TTS segments generated in:\n {out_dir}")

@@ -1,14 +1,19 @@
 from __future__ import annotations
-from dubpipeline.utils.logging import info, step, warn, error, debug
+from dubpipeline.utils.logging import info, step, warn, error, debug, init_logger
 import argparse
 from pathlib import Path
 import os
+import shutil
 
 from .config import load_pipeline_config, load_pipeline_config_ex
 from dubpipeline.steps import step_whisperx, step_translate, step_tts, step_align, step_mux_audio, step_merge_py
 from .steps import step_extract_audio
 
+
 def main() -> None:
+    """
+    :rtype: None
+    """
     parser = argparse.ArgumentParser(
         prog="dubpipeline",
         description="DubPipeline: локальный пайплайн дубляжа видео",
@@ -27,15 +32,18 @@ def main() -> None:
 
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
     cfg = load_pipeline_config_ex(pipeline_path)
-    cfg.deleteSRT
+    # Например: out/<project_name>.log
+    log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
+    init_logger(log_path)
 
     if args.command == "run":
-
-        if (cfg.rebuild==True):
+        if cfg.rebuild:
             if os.path.exists(cfg.paths.srt_file_en):
                 os.remove(cfg.paths.srt_file_en)
             if os.path.exists(Path(cfg.paths.segments_path)):
-                os.remove(Path(cfg.paths.segments_path))
+                shutil.rmtree(Path(cfg.paths.segments_path))
+            if os.path.exists(Path(cfg.paths.segments_align_path)):
+                shutil.rmtree(Path(cfg.paths.segments_align_path))
 
         # Пока реализован только шаг extract_audio.
         if cfg.steps.extract_audio:
@@ -51,10 +59,8 @@ def main() -> None:
             step_merge_py.run(cfg)
         else:
             info("[dubpipeline] Шаг extract_audio отключён в конфиге.")
-        if (cfg.deleteSRT==True):
+        if cfg.deleteSRT and os.path.exists(Path(cfg.paths.srt_file_en)):
             os.remove(cfg.paths.srt_file_en)
-
 
 if __name__ == "__main__":
     main()
-

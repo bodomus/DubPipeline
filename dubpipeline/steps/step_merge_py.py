@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.logging import info, step, warn, error, debug
+from dubpipeline.utils.quote_pretty_run import norm_arg
 
 
 def run_ffmpeg(cmd: list[str]) -> None:
@@ -31,9 +32,9 @@ def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg"
         ffmpeg,
         "-y",
         "-i",
-        str(video),
+        norm_arg(str(video)),
         "-i",
-        str(audio),
+        norm_arg(str(audio)),
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "copy",
@@ -41,7 +42,7 @@ def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg"
         "-shortest",
         "-metadata:s:a:0", "language=rus",
         "-metadata:s:a:0", "title=Russian_Dub",
-        str(out_path),
+        norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
 
@@ -61,9 +62,9 @@ def mux_add(
         ffmpeg,
         "-y",
         "-i",
-        str(video),
+        norm_arg(str(video)),
         "-i",
-        str(audio),
+        norm_arg(str(audio)),
         "-map", "0:v:0",
         "-map", "0:a:0",
         "-map", "1:a:0",
@@ -75,7 +76,7 @@ def mux_add(
         "-metadata:s:a:0", "title=Original",
         "-metadata:s:a:1", "language=rus",
         "-metadata:s:a:1", "title=Russian_Dub",
-        str(out_path),
+        norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
 
