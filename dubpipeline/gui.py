@@ -8,10 +8,10 @@ import FreeSimpleGUI as sg
 import yaml
 import re
 
-from dubpipeline.config import save_pipeline_yaml
+from dubpipeline.config import save_pipeline_yaml, get_voice
 from dubpipeline.steps.step_tts import getVoices
 
-from dubpipeline.utils.logging import step, info, warn, error, debug
+from dubpipeline.utils.logging import  info
 
 
 USE_SUBPROCESS = True
@@ -21,7 +21,7 @@ with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
     BASE_CFG = yaml.safe_load(f)
 
 LOG_LINE_RE = re.compile(
-    r"^\[(?P<level>\w+\s*)\]\s*"                # [LEVEL]
+    r"^\[(?P<level>\w+\s*)]\s*"                # [LEVEL]
     r"(?:(?P<time>\d{2}:\d{2}:\d{2})\s*\|\s*)?"  # необязательное "HH:MM:SS | "
     r"(?P<msg>.*)$"                          # остальное — сообщение
 )
@@ -37,15 +37,12 @@ LEVEL_COLORS = {
 
 
 def print_parsed_log(window, line: str) -> None:
-    # отладка
-    # print("PRINT_PARSED_LOG -LOG-", repr(line))
-    debug(f"[DEBUG] print_parsed_log -LOG- {repr(line)}")
     ml = window["-LOGBOX-"]
 
     # 1) пробуем распарсить наш формат [LEVEL] HH:MM:SS | msg
     m = LOG_LINE_RE.match(line)
     if m:
-        level = m.group("level").upper()
+        level = m.group("level").upper().strip()
         ts = m.group("time")
         msg = m.group("msg")
 
@@ -95,7 +92,7 @@ def main():
     sg.theme("SystemDefault")
 
     voices = getVoices()
-
+    current_voice = get_voice()
     layout = [
         [sg.Text("Project name:"),
          sg.Input(key="-PROJECT-", expand_x=True)],
@@ -110,7 +107,7 @@ def main():
              key="-VOICE-",
              readonly=True,
              enable_events=True,
-             default_value=voices[0] if voices else (None if voices else None),
+             default_value=current_voice if current_voice != "" else voices[0] ,
              size=(40, 1),
          )],
 
@@ -119,7 +116,7 @@ def main():
          sg.FolderBrowse("...")],
 
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
-        [sg.Checkbox("Генерировать субтитры?", key="-SRT-")],
+        [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
         [sg.Checkbox("Перегенерировать все шаги (игнорировать кэш)", key="-REBUILD-")],
 
         [sg.Text("Доп. аргументы CLI (опционально):")],
@@ -150,8 +147,9 @@ def main():
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
     window["-PROJECT-"].update("2")
-    window["-IN-"].update("D:/projects/python/DubPipeline/tests/data/2.mp4")
-    window["-OUT-"].update("D:/projects/python/DubPipeline/tests/output")
+    window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
+    window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/out")
+    window["-GPU-"].update(True)
     running = False
 
     while True:
@@ -172,7 +170,6 @@ def main():
             current_voice = values["-VOICE-"]
             line = info(f"Выбран голос: {current_voice}")
             window.write_event_value("-LOG-", line)
-            #window["-LOGBOX-"].print(f"[INFO] Выбран голос: {current_voice}")
 
         if event == "-START-":
             if running:
@@ -181,6 +178,7 @@ def main():
 
             input_path = values["-IN-"].strip()
             output_dir = values["-OUT-"].strip()
+            rebuild = values["-REBUILD-"]
 
             if not input_path or not os.path.isfile(input_path):
                 sg.popup_error("Укажите корректный путь к входному видео.")
@@ -213,12 +211,13 @@ def main():
             str=repr(values[ "-LOG-"])
             info(f"CATCH -LOG- {str}")
             raw = values["-LOG-"]
-            raw = raw.replace("\r", "\n")
+            if raw is not None:
+                raw = raw.replace("\r", "\n")
 
-            for line in raw.splitlines():
-                if not line:
-                    continue
-                print_parsed_log(window, line)
+                for line in raw.splitlines():
+                    if not line:
+                        continue
+                    print_parsed_log(window, line)
 
         if event == "-DONE-":
             exit_code = values["-DONE-"]

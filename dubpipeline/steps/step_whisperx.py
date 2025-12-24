@@ -159,16 +159,8 @@ def run(cfg:PipelineConfig):
     segments = merge_words_to_segments(words, max_gap=MAX_GAP_BETWEEN_WORDS)
 
     # 8) Сохраняем результаты
-    #words_path = OUT_DIR / f"{base_name}.words.json"
-    segments_path = OUT_DIR / f"{base_name}.segments.json"
-    cfg.paths.segments_file = segments_path
-    cfg.paths.segments_ru_file = OUT_DIR / f"{base_name}.segments.ru.json"
-    #print(f"[SAVE] Words → {words_path}")
-    #with open(words_path, "w", encoding="utf-8") as f:
-    #    json.dump(words, f, ensure_ascii=False, indent=2)
-
-    info(f"[bold yellow][SAVE] Segments → {segments_path}[/bold yellow]")
-    with open(segments_path, "w", encoding="utf-8") as f:
+    info(f"[bold yellow][SAVE] Segments → {cfg.paths.segments_file}[/bold yellow]")
+    with open(pathlib.Path(cfg.paths.segments_file), "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
 
     info("[bold green][DONE] Готово. Теперь у вас есть words.json и segments.json[/bold green]\n")

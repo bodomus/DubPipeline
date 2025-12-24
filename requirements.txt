@@ -25,3 +25,5 @@ huggingface_hub>=0.23.0
 
 argostranslate
 urllib3<2
+freesimplegui
+

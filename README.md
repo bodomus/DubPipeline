@@ -85,3 +85,5 @@ python .\tools\mux_ru_audio.py ^
   --mode replace
 ```
 2) Добавить русскую дорожку к оригиналу (рекомендую в MKV):
+
+pip install --upgrade coqui-tts soundfile

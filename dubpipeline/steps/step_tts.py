@@ -33,8 +33,8 @@ def run(cfg:PipelineConfig):
     # --- Дебаг: какие вообще есть спикеры и языки ---
     speakers = getattr(tts, "speakers", None)
     languages = getattr(tts, "languages", None)
-    info("Available speakers:\n {speakers}")
-    info("Available languages:\n {languages}")
+    info(f"Available speakers:\n {speakers}")
+    info(f"Available languages:\n {languages}")
 
     if not speakers:
         raise RuntimeError(
@@ -42,12 +42,13 @@ def run(cfg:PipelineConfig):
             "Нужно либо обновить coqui-tts, либо использовать speaker_wav."
         )
 
-    default_speaker = speakers[0]
+    default_speaker = cfg.tts.voice if cfg.tts.voice is not None else speakers[0]
+
     info(f"Using default speaker: {default_speaker!r}\n")
 
     # --- ЗАГРУЗКА СЕГМЕНТОВ ---
     info(f"Loading segments from {segments_path}\n")
-    with segments_path.open("r", encoding="utf-8") as f:
+    with Path(segments_path).open("r", encoding="utf-8") as f:
         segments = json.load(f)
 
     segments = sorted(segments, key=lambda s: s["start"])
@@ -75,6 +76,7 @@ def run(cfg:PipelineConfig):
             file_path=str(out_wav),
             language=cfg.languages,
             speaker=default_speaker,
+            split_sentences=True,
         )
 
-    info("[DONE] Russian TTS segments generated in:\n {out_dir}")
+    info("f[DONE] Russian TTS segments generated in:\n {out_dir}")
