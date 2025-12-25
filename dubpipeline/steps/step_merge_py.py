@@ -149,8 +149,8 @@ def run(cfg:PipelineConfig) -> None:
     print(f"Output: {out_path}\n")
     print(f"Mode: {cfg.mode}\n")
 
-    if cfg.mode == "replace":
-        mux_replace(video, audio, out_path, ffmpeg="eng")
+    if cfg.mode == "Замена":
+        mux_replace(video, audio, out_path)
     else:
         mux_add(video, audio, out_path)
 
