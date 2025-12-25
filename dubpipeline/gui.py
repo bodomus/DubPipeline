@@ -90,7 +90,7 @@ def run_pipeline(args_list, window):
 
 def main():
     sg.theme("SystemDefault")
-
+    mpeg_modes = ("Замена", "Добавление")
     voices = getVoices()
     current_voice = get_voice()
     layout = [
