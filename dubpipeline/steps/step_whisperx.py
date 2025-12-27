@@ -72,8 +72,8 @@ def merge_words_to_segments(words, max_gap=0.8):
 def run(cfg:PipelineConfig):
     #Создание json файла с английским текстом и временными метками.
     # Папка для результатов
-    OUT_DIR = cfg.paths.out_dir
-    OUT_DIR.mkdir(exist_ok=True)
+    #OUT_DIR = cfg.paths.out_dir
+    #OUT_DIR.mkdir(exist_ok=True)
 
     audio_path = pathlib.Path(cfg.paths.audio_wav)
     if not audio_path.exists():

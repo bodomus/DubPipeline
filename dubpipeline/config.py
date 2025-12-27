@@ -76,7 +76,7 @@ class PipelineConfig:
     deleteSRT: bool
     rebuild:bool
     tts: TtsConfig
-
+    mode: str
 
 def get_voice()->str:
     cfg = load_pipeline_config_ex(pipeline_path)
@@ -118,15 +118,15 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     input_video = values["-IN-"].strip()
     voice = values["-VOICE-"]
     usegpu = bool(values.get("-GPU-", True))
+    mode = values.get("-MODES-", "Добавление")
 
     # заполняем верхний уровень
     cfg["project_name"] = project_name
     cfg["input_video"] = input_video
     cfg["usegpu"] = usegpu
     cfg["rebuild"] = rebuild
-    #cfg["voice"] = voice
+    cfg["mode"] = mode
 
-    # языки (если хотите их менять из GUI)
     src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
     tgt_lang = values.get("-TGT_LANG-", cfg.get("languages", {}).get("tgt", "ru"))
 
@@ -170,10 +170,10 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
     deleteSRT = raw_cfg.get("deleteSRT", "true")
     rebuild = raw_cfg.get("rebuild", "true")
-
     mode = raw_cfg.get("mode")
     if not mode:
-        mode="add"
+        mode="Добавление"
+
     project_name = raw_cfg.get("project_name")
 
     #TTS

@@ -21,8 +21,9 @@ def init_logger(log_path: str | Path | None) -> None:
         return
 
     p = Path(log_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _log_file = p.open("a", encoding="utf-8")
+    #p.parent.mkdir(parents=True, exist_ok=True)
+    p.touch(exist_ok=True)
+    _log_file = p.open("w", encoding="utf-8")
 
 
 def _write_line(line: str) -> None:

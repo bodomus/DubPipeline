@@ -33,7 +33,7 @@ def main() -> None:
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
     cfg = load_pipeline_config_ex(pipeline_path)
     # Например: out/<project_name>.log
-    log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
+    log_path = Path(cfg.paths.audio_wav).parent / f"{cfg.project_name}.log"
     init_logger(log_path)
 
     if args.command == "run":

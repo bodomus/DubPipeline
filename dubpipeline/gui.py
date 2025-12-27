@@ -7,6 +7,8 @@ from pathlib import Path
 import FreeSimpleGUI as sg
 import yaml
 import re
+import time
+import shutil
 
 from dubpipeline.config import save_pipeline_yaml, get_voice
 from dubpipeline.steps.step_tts import getVoices
@@ -88,18 +90,71 @@ def run_pipeline(args_list, window):
         window.write_event_value("-LOG-", f"[ERROR] {e}\n")
         window.write_event_value("-DONE-", 1)
 
+
+def _emit_info(window, msg: str) -> None:
+    ts = time.strftime("%H:%M:%S")
+    window.write_event_value("-LOG-", f"[INFO ] {ts} | {msg}\n")
+
+
+def run_pipeline_sequence(run_items, window):
+    """Запускает несколько пайплайнов подряд в одном потоке.
+
+    run_items: list[tuple[label:str, args_list:list[str]]]
+    Шлёт события -LOG- и единый -DONE- в конце.
+    """
+    try:
+        for idx, (label, args_list) in enumerate(run_items, start=1):
+            _emit_info(window, f"=== ({idx}/{len(run_items)}) {label} ===")
+
+            cmd = [sys.executable, "-u", "-m", "dubpipeline.cli"] + args_list
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+            for line in process.stdout:
+                window.write_event_value("-LOG-", line)
+
+            process.wait()
+            exit_code = process.returncode
+            if exit_code != 0:
+                _emit_info(window, f"Остановка: пайплайн завершился с кодом {exit_code}")
+                window.write_event_value("-DONE-", exit_code)
+                return
+
+        window.write_event_value("-DONE-", 0)
+    except Exception as e:
+        window.write_event_value("-LOG-", f"[ERROR] {e}\n")
+        window.write_event_value("-DONE-", 1)
+
 def main():
     sg.theme("SystemDefault")
-
+    mpeg_modes = ("Замена", "Добавление")
     voices = getVoices()
     current_voice = get_voice()
+
+    video_exts = {".mp4", ".mkv", ".mov", ".avi"}
+
     layout = [
+        [sg.Text("Источник:"),
+         sg.Radio("Один файл", "SRCMODE", key="-SRC_FILE-", default=True, enable_events=True),
+         sg.Radio("Папка", "SRCMODE", key="-SRC_DIR-", enable_events=True)],
+
         [sg.Text("Project name:"),
          sg.Input(key="-PROJECT-", expand_x=True)],
 
         [sg.Text("Входное видео:"),
          sg.Input(key="-IN-", expand_x=True, enable_events=True),
-         sg.FileBrowse("...", file_types=(("Видео файлы", "*.mp4;*.mkv;*.mov;*.avi"),))],
+         sg.FileBrowse("...", key="-BROWSE_FILE-", file_types=(("Видео файлы", "*.mp4;*.mkv;*.mov;*.avi"),))],
+
+        [sg.Text("Папка с видео:"),
+         sg.Input(key="-IN_DIR-", expand_x=True, enable_events=True, disabled=True),
+         sg.FolderBrowse("...", key="-BROWSE_DIR-", target="-IN_DIR-", disabled=True)],
 
         [sg.Text("Голос TTS:"),
          sg.Combo(
@@ -118,6 +173,15 @@ def main():
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
         [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
         [sg.Checkbox("Перегенерировать все шаги (игнорировать кэш)", key="-REBUILD-")],
+        [sg.Text("Режим добавления аудио:"),
+         sg.Combo(
+             values=mpeg_modes,
+             key="-MODES-",
+             readonly=True,
+             enable_events=True,
+             default_value="Добавление",
+             size=(40, 1),
+         )],
 
         [sg.Text("Доп. аргументы CLI (опционально):")],
         [sg.Input(key="-EXTRA-", expand_x=True)],
@@ -151,6 +215,15 @@ def main():
     window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/out")
     window["-GPU-"].update(True)
     running = False
+    last_run_count = 0
+
+    def set_source_mode(is_dir: bool) -> None:
+        window["-IN-"].update(disabled=is_dir)
+        window["-BROWSE_FILE-"].update(disabled=is_dir)
+        window["-IN_DIR-"].update(disabled=not is_dir)
+        window["-BROWSE_DIR-"].update(disabled=not is_dir)
+
+    set_source_mode(False)
 
     while True:
         event, values = window.read()
@@ -158,58 +231,116 @@ def main():
         if event in (sg.WIN_CLOSED, "-EXIT-"):
             break
 
+        if event in ("-SRC_FILE-", "-SRC_DIR-"):
+            set_source_mode(bool(values.get("-SRC_DIR-")))
+
         # Автозаполнение Project name по имени файла
         if event == "-IN-":
-            path_str = values["-IN-"].strip()
-            if path_str:
-                p = Path(path_str)
-                window["-PROJECT-"].update(p.stem)
+            if values.get("-SRC_FILE-", True):
+                path_str = values["-IN-"].strip()
+                if path_str:
+                    p = Path(path_str)
+                    window["-PROJECT-"].update(p.stem)
 
         # Выбор голоса (если надо, можно куда-то логировать)
         if event == "-VOICE-":
             current_voice = values["-VOICE-"]
-            line = info(f"Выбран голос: {current_voice}")
-            window.write_event_value("-LOG-", line)
+            _emit_info(window, f"Выбран голос: {current_voice}")
 
         if event == "-START-":
             if running:
                 sg.popup("Процесс уже запущен, дождитесь окончания.", title="Инфо")
                 continue
 
-            input_path = values["-IN-"].strip()
-            output_dir = values["-OUT-"].strip()
-            rebuild = values["-REBUILD-"]
+            is_dir_mode = bool(values.get("-SRC_DIR-"))
+            base_out = values["-OUT-"].strip()
+            base_project = values["-PROJECT-"].strip()
 
+            # --- Режим: папка ---
+            if is_dir_mode:
+                in_dir = values.get("-IN_DIR-", "").strip()
+                if not in_dir or not os.path.isdir(in_dir):
+                    sg.popup_error("Укажите корректную папку с видео.")
+                    continue
+
+                in_dir_p = Path(in_dir)
+                files = sorted(
+                    [p for p in in_dir_p.iterdir() if p.is_file() and p.suffix.lower() in video_exts],
+                    key=lambda p: p.name.lower(),
+                )
+                if not files:
+                    sg.popup_error("В выбранной папке нет видео-файлов (*.mp4, *.mkv, *.mov, *.avi).")
+                    continue
+
+                # Если выход не указан — берём саму папку
+                if not base_out:
+                    base_out = str(in_dir_p)
+                    window["-OUT-"].update(base_out)
+
+                run_items = []
+                for p in files:
+                    project_name = f"{base_project}_{p.stem}" if base_project else p.stem
+                    out_dir = str(Path(base_out) / project_name)  # под-папка, чтобы не было коллизий
+
+                    v = dict(values)
+                    v["-IN-"] = str(p)
+                    v["-PROJECT-"] = project_name
+                    v["-OUT-"] = out_dir
+
+                    pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
+                    pipeline_file.parent.mkdir(parents=True, exist_ok=True)
+                    if not pipeline_file.exists():
+                        shutil.copy2(TEMPLATE_PATH, pipeline_file)
+
+                    pipeline_path = save_pipeline_yaml(v, pipeline_file)
+                    run_items.append((p.name, ["run", str(pipeline_path)]))
+
+                last_run_count = len(run_items)
+                window["-LOGBOX-"].update("")
+                window["-STATUS-"].update(f"Статус: running ({last_run_count} files)")
+                running = True
+                threading.Thread(
+                    target=run_pipeline_sequence, args=(run_items, window), daemon=True
+                ).start()
+                continue
+
+            # --- Режим: один файл ---
+            input_path = values["-IN-"].strip()
             if not input_path or not os.path.isfile(input_path):
                 sg.popup_error("Укажите корректный путь к входному видео.")
                 continue
 
             # Если выход не указан — берём папку входного файла
-            if not output_dir:
-                output_dir = str(Path(input_path).parent)
-                window["-OUT-"].update(output_dir)
+            if not base_out:
+                base_out = str(Path(input_path).parent)
+                window["-OUT-"].update(base_out)
 
-            project_name = values["-PROJECT-"].strip() or Path(input_path).stem
+            project_name = base_project or Path(input_path).stem
             values["-PROJECT-"] = project_name
+            out_dir = str(Path(base_out) / project_name)
+            values["-OUT-"] = out_dir
 
-            # Здесь можно передать GPU/SRT/доп. аргументы в save_pipeline_yaml через values
-            # (вы уже это сделали в своей реализации)
-            pipeline_path = save_pipeline_yaml(values, TEMPLATE_PATH)
+            pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
+            pipeline_file.parent.mkdir(parents=True, exist_ok=True)
+            if not pipeline_file.exists():
+                shutil.copy2(TEMPLATE_PATH, pipeline_file)
 
-            args = ["run", pipeline_path]
+            pipeline_path = save_pipeline_yaml(values, pipeline_file)
+            args = ["run", str(pipeline_path)]
 
-            window["-LOGBOX-"].update("")  # очистить лог
+            last_run_count = 1
+            window["-LOGBOX-"].update("")
             window["-STATUS-"].update("Статус: running")
             running = True
 
             worker_thread = threading.Thread(
-                target=run_pipeline, args=(args, window), daemon=True
+                target=run_pipeline_sequence, args=([(Path(input_path).name, args)], window), daemon=True
             )
             worker_thread.start()
 
         if event == "-LOG-":
-            str=repr(values[ "-LOG-"])
-            info(f"CATCH -LOG- {str}")
+            log_repr = repr(values["-LOG-"])
+            info(f"CATCH -LOG- {log_repr}")
             raw = values["-LOG-"]
             if raw is not None:
                 raw = raw.replace("\r", "\n")
@@ -223,7 +354,10 @@ def main():
             exit_code = values["-DONE-"]
             running = False
             status = "ok" if exit_code == 0 else f"error (code {exit_code})"
-            window["-STATUS-"].update(f"Статус: {status}")
+            if last_run_count > 1 and exit_code == 0:
+                window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
+            else:
+                window["-STATUS-"].update(f"Статус: {status}")
 
     window.close()
 
