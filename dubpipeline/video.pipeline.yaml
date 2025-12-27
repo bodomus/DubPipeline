@@ -10,14 +10,14 @@ languages:
 paths:
   workdir: .
   out_dir: out
-  input_video: J:/Projects/!!!AI/DubPipeline/tests/data/00 - Preview.mkv
-  audio_wav: J:/Projects/!!!AI/DubPipeline/tests/out/00 - Preview.wav
-  segments_json: J:/Projects/!!!AI/DubPipeline/tests/out/00 - Preview.segments.json
-  segments_ru_json: J:/Projects/!!!AI/DubPipeline/tests/out/00 - Preview.segments.ru.json
-  srt_file_en: J:/Projects/!!!AI/DubPipeline/tests/out/00 - Preview.srt
-  tts_segments_dir: J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments
-  tts_segments_align_dir: J:/Projects/!!!AI/DubPipeline/tests/out/segments/tts_ru_segments_aligned
-  final_video: J:/Projects/!!!AI/DubPipeline/tests/out/00 - Preview.ru.muxed.mp4
+  input_video: D:/projects/python/DubPipeline/tests/data/2.mkv
+  audio_wav: D:/projects/python/DubPipeline/tests/output/2.wav
+  segments_json: D:/projects/python/DubPipeline/tests/output/2.segments.json
+  segments_ru_json: D:/projects/python/DubPipeline/tests/output/2.segments.ru.json
+  srt_file_en: D:/projects/python/DubPipeline/tests/output/2.srt
+  tts_segments_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments
+  tts_segments_align_dir: D:/projects/python/DubPipeline/tests/output/segments/tts_ru_segments_aligned
+  final_video: D:/projects/python/DubPipeline/tests/output/2.ru.muxed.mp4
 steps:
   extract_audio: true
   asr_whisperx: true
