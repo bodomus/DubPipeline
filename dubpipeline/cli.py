@@ -10,6 +10,14 @@ from dubpipeline.steps import step_whisperx, step_translate, step_tts, step_alig
 from .steps import step_extract_audio
 
 
+def rebuild_cleanup(cfg):
+    # файл
+    Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
+
+    # папки
+    shutil.rmtree(Path(cfg.paths.segments_path), ignore_errors=True)
+    shutil.rmtree(Path(cfg.paths.segments_align_path), ignore_errors=True)
+
 def main() -> None:
     """
     :rtype: None
@@ -38,12 +46,7 @@ def main() -> None:
 
     if args.command == "run":
         if cfg.rebuild:
-            if os.path.exists(cfg.paths.srt_file_en):
-                os.remove(cfg.paths.srt_file_en)
-            if os.path.exists(Path(cfg.paths.segments_path)):
-                shutil.rmtree(Path(cfg.paths.segments_path))
-            if os.path.exists(Path(cfg.paths.segments_align_path)):
-                shutil.rmtree(Path(cfg.paths.segments_align_path))
+            rebuild_cleanup(cfg)
 
         # Пока реализован только шаг extract_audio.
         if cfg.steps.extract_audio:
