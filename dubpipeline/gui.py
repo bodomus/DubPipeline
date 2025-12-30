@@ -103,8 +103,13 @@ def run_pipeline_sequence(run_items, window):
     Шлёт события -LOG- и единый -DONE- в конце.
     """
     try:
+        total = len(run_items)
+
         for idx, (label, args_list) in enumerate(run_items, start=1):
-            _emit_info(window, f"=== ({idx}/{len(run_items)}) {label} ===")
+            # <<< ДОБАВИТЬ: сообщаем GUI какой файл сейчас пойдёт
+            window.write_event_value("-FILE-", {"idx": idx, "total": total, "name": label})
+
+            _emit_info(window, f"=== ({idx}/{total}) {label} ===")
 
             cmd = [sys.executable, "-u", "-m", "dubpipeline.cli"] + args_list
             process = subprocess.Popen(
@@ -131,6 +136,7 @@ def run_pipeline_sequence(run_items, window):
     except Exception as e:
         window.write_event_value("-LOG-", f"[ERROR] {e}\n")
         window.write_event_value("-DONE-", 1)
+
 
 def main():
     sg.theme("SystemDefault")
@@ -208,11 +214,13 @@ def main():
         finalize=True,
     )
 
+    BASE_TITLE = "DubPipeline GUI"
+
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
     window["-PROJECT-"].update("2")
     window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
-    window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/out")
+    window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/output")
     window["-GPU-"].update(True)
     running = False
     last_run_count = 0
@@ -228,6 +236,27 @@ def main():
     while True:
         event, values = window.read()
 
+        if event == "-FILE-":
+            data = values["-FILE-"] or {}
+            idx = data.get("idx", 0)
+            total = data.get("total", 0)
+            name = data.get("name", "")
+
+            # Строка статуса (и для одиночного файла, и для папки)
+            if total and idx:
+                window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
+            else:
+                window["-STATUS-"].update(f"Статус: running — {name}")
+
+            # Заголовок окна
+            try:
+                if total and idx:
+                    window.TKroot.title(f"{BASE_TITLE} — {idx}/{total}: {name}")
+                else:
+                    window.TKroot.title(f"{BASE_TITLE} — {name}")
+            except Exception:
+                pass
+
         if event in (sg.WIN_CLOSED, "-EXIT-"):
             break
 
@@ -235,12 +264,11 @@ def main():
             set_source_mode(bool(values.get("-SRC_DIR-")))
 
         # Автозаполнение Project name по имени файла
-        if event == "-IN-":
-            if values.get("-SRC_FILE-", True):
-                path_str = values["-IN-"].strip()
-                if path_str:
-                    p = Path(path_str)
-                    window["-PROJECT-"].update(p.stem)
+        if event == "-IN-" and values.get("-SRC_FILE-", True):
+            path_str = values["-IN-"].strip()
+            if path_str:
+                p = Path(path_str)
+                window["-PROJECT-"].update(p.stem)
 
         # Выбор голоса (если надо, можно куда-то логировать)
         if event == "-VOICE-":
@@ -353,6 +381,12 @@ def main():
         if event == "-DONE-":
             exit_code = values["-DONE-"]
             running = False
+
+            try:
+                window.TKroot.title(BASE_TITLE)
+            except Exception:
+                pass
+
             status = "ok" if exit_code == 0 else f"error (code {exit_code})"
             if last_run_count > 1 and exit_code == 0:
                 window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
