@@ -27,7 +27,7 @@ class StepsConfig:
     translate: bool = False
     tts: bool = False
     merge: bool = False
-    deleteSRT: bool = False
+    delete_srt: bool = False
 
 @dataclass
 class PathsConfig:
@@ -73,10 +73,10 @@ class PipelineConfig:
     mode:str
     languages:str
     usegpu:bool #usegpu
-    deleteSRT: bool
+    delete_srt: bool
     rebuild:bool
     tts: TtsConfig
-    mode: str
+    #isgarbage: bool
 
 def get_voice()->str:
     cfg = load_pipeline_config_ex(pipeline_path)
@@ -168,7 +168,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
 def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
-    deleteSRT = raw_cfg.get("deleteSRT", "true")
+    delete_srt = raw_cfg.get("deleteSRT", "true")
     rebuild = raw_cfg.get("rebuild", "true")
     mode = raw_cfg.get("mode")
     if not mode:
@@ -194,7 +194,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     )
 
     languages_dict:Dict[str, Any] = raw_cfg.get("languages", {}) or {}
-    languages: str = languages_dict.get("tgt", "ru")
+    ##languages: str = languages_dict.get("tgt", "ru")
 
     # --- Paths ---
     paths_dict: Dict[str, Any] = raw_cfg.get("paths", {}) or {}
@@ -273,7 +273,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
         mode=mode,
         usegpu=use_gpu,
         languages='ru',
-        deleteSRT=deleteSRT,
+        delete_srt=delete_srt,
         rebuild=rebuild,
     )
 
