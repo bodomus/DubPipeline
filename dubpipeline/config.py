@@ -76,7 +76,7 @@ class PipelineConfig:
     delete_srt: bool
     rebuild:bool
     tts: TtsConfig
-    #isgarbage: bool
+    cleanup: bool
 
 def get_voice()->str:
     cfg = load_pipeline_config_ex(pipeline_path)
@@ -115,6 +115,9 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     project_name = values["-PROJECT-"].strip()
     out = values["-OUT-"].strip()
     rebuild=values["-REBUILD-"]
+    delete_srt = bool(values.get("-SRT-", False))
+    cleanup = bool(values.get("-CLEANUP-", False))
+
     input_video = values["-IN-"].strip()
     voice = values["-VOICE-"]
     usegpu = bool(values.get("-GPU-", True))
@@ -126,7 +129,8 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["usegpu"] = usegpu
     cfg["rebuild"] = rebuild
     cfg["mode"] = mode
-
+    cfg["deleteSRT"] = delete_srt
+    cfg["cleanup"] = cleanup
     src_lang = values.get("-SRC_LANG-", cfg.get("languages", {}).get("src", "en"))
     tgt_lang = values.get("-TGT_LANG-", cfg.get("languages", {}).get("tgt", "ru"))
 
@@ -170,6 +174,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     use_gpu = raw_cfg.get("usegpu", "true")
     delete_srt = raw_cfg.get("deleteSRT", "true")
     rebuild = raw_cfg.get("rebuild", "true")
+    cleanup = bool(raw_cfg.get("cleanup", False))
     mode = raw_cfg.get("mode")
     if not mode:
         mode="Добавление"
@@ -275,6 +280,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
         languages='ru',
         delete_srt=delete_srt,
         rebuild=rebuild,
+        cleanup=cleanup,
     )
 
 

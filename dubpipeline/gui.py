@@ -179,6 +179,7 @@ def main():
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
         [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
         [sg.Checkbox("Перегенерировать все шаги (игнорировать кэш)", key="-REBUILD-")],
+        [sg.Checkbox("Убирать мусор (удалять временные файлы после успеха)", key="-CLEANUP-")],
         [sg.Text("Режим добавления аудио:"),
          sg.Combo(
              values=mpeg_modes,
@@ -222,6 +223,7 @@ def main():
     window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
     window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/output")
     window["-GPU-"].update(True)
+    window["-CLEANUP-"].update(True)
     running = False
     last_run_count = 0
 
