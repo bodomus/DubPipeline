@@ -309,7 +309,7 @@ def main():
 
                 run_items = []
                 for p in files:
-                    project_name = f"{base_project}_{p.stem}" if base_project else p.stem
+                    project_name = f"{p.stem}"
                     out_dir = str(Path(base_out) / project_name)  # под-папка, чтобы не было коллизий
 
                     v = dict(values)
@@ -369,8 +369,6 @@ def main():
             worker_thread.start()
 
         if event == "-LOG-":
-            log_repr = repr(values["-LOG-"])
-            info(f"CATCH -LOG- {log_repr}")
             raw = values["-LOG-"]
             if raw is not None:
                 raw = raw.replace("\r", "\n")
