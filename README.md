@@ -9,8 +9,10 @@ ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le output.wav
 .\tools\tts_align_and_mix.py
 .\tools\mux_ru_audio.py
 
+Получение аудио файла из видео файла через ffmpeg
 
-
+ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le output.wav
+Папка .tests для тестов
 
 # _Установка_
 ```bash
@@ -23,15 +25,10 @@ ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le output.wav
   pip install -r requirements.txt
 ```
 
-Получение аудио файла из видео
+# **_Запуск 1 шага_**
 
-ffmpeg -i input.mp4 -vn -ac 1 -ar 16000 -c:a pcm_s16le output.wav
-
-
-
-# **_Запуск_**
 получить первый .srt из реального аудио.
-Положить фвйл D:\AI\DubPipeline\tests\data\lecture_sample.wav
+Положить фвйл .tests\data\lecture_sample.wav
 Запустить
 ```bash
 python .\tools\test_whisperx_to_srt.py
@@ -39,21 +36,23 @@ python .\tools\test_whisperx_to_srt.py
 Ожидание
 tests\output\lecture_sample.en.srt
 
-# ** Запуск 3 шага**
+
+# Запуск 2 шага
+#### Диаризация + формирование сегментов для перевода.
 ```bash
 python .\tools\whisperx_dump_segments.py
 ```
 
 
-# **Запуск 4 шага**
+# **Запуск 3 шага**
 pip install -r requirements_translate.txt
 
 ```bash
 python .\tools\translate_segments.py
 ```
 
-# **Запуск 5 шага**
-## Шаг 5 — Генерация русской озвучки (TTS).
+# **Запуск 4 шага**
+## Шаг 4 — Генерация русской озвучки (TTS).
 ```bash
 Prerequisites
 pip install --upgrade coqui-tts soundfile
@@ -71,9 +70,12 @@ pip install soundfile numpy
 python .\tools\tts_align_and_mix.py
 ```
 
+# 5. Слияние звуковой дорожки в видео файл 
 
-3. Слияние звуковой дорожки в видео файл 
-mux_ru_audio.py
+Запуск 
+```bash
+python .\tools\mux_ru_audio.py
+```
 
 1) Заменить оригинальную аудиодорожку:
 ```bash
@@ -85,5 +87,9 @@ python .\tools\mux_ru_audio.py ^
   --mode replace
 ```
 2) Добавить русскую дорожку к оригиналу (рекомендую в MKV):
+(venv) λ python .\tools\mux_ru_audio.py ^
+  --video in\lecture_sample.mp4 ^
+  --audio out\lecture_sample.ru_full.wav ^
+  --out out\lecture_sample.ru.with_both.mkv ^
+  --mode add
 
-pip install --upgrade coqui-tts soundfile
