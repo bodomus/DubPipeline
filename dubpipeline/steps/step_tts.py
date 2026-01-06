@@ -12,7 +12,6 @@ from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.concat_wavs import concat_wavs
 from dubpipeline.utils.logging import info, step, warn, error
 
-
 # ============================
 # Coqui TTS / XTTS settings
 # ============================
@@ -200,69 +199,69 @@ def run(cfg: PipelineConfig) -> None:
             continue
 
         text_ru = _norm_text(seg.get("text_ru") or "")
-        if not text_ru:
-            warn(f"Segment {seg_id} has empty 'text_ru', skipping\n")
-            skipped += 1
-            continue
+        if text_ru:
+            out_wav = out_dir / f"seg_{int(seg_id):04d}.wav"
 
-        out_wav = out_dir / f"seg_{int(seg_id):04d}.wav"
+            if out_wav.exists() and not rebuild:
+                warn(f"[SKIP] {out_wav} already exists\n")
+                skipped += 1
+                continue
 
-        if out_wav.exists() and not rebuild:
-            warn(f"[SKIP] {out_wav} already exists\n")
-            skipped += 1
-            continue
+            # если rebuild=True — перезаписываем
+            if out_wav.exists() and rebuild:
+                try:
+                    out_wav.unlink()
+                except Exception:
+                    pass
 
-        # если rebuild=True — перезаписываем
-        if out_wav.exists() and rebuild:
+            start = float(seg.get("start", 0.0))
+            end = float(seg.get("end", 0.0))
+
+            info(f"[TTS] id={seg_id}  {start:.2f}s–{end:.2f}s")
+            info(f"      RU: {text_ru}\n")
+
             try:
-                out_wav.unlink()
-            except Exception:
-                pass
+                chunks = split_ru_text(text_ru, max_len=MAX_RU_CHARS)
 
-        start = float(seg.get("start", 0.0))
-        end = float(seg.get("end", 0.0))
-
-        info(f"[TTS] id={seg_id}  {start:.2f}s–{end:.2f}s\n")
-        info(f"      RU: {text_ru}\n")
-
-        try:
-            chunks = split_ru_text(text_ru, max_len=MAX_RU_CHARS)
-
-            if len(chunks) == 1:
-                tts.tts_to_file(
-                    text=text_ru,
-                    file_path=str(out_wav),
-                    language=language,
-                    speaker=default_speaker,
-                    split_sentences=True,
-                )
-            else:
-                parts: List[Path] = []
-
-                # чистим возможные старые parts этого сегмента
-                old_parts = sorted(out_dir.glob(f"seg_{int(seg_id):04d}.part*.wav"))
-                if old_parts:
-                    _cleanup_files(old_parts)
-
-                for i, ch in enumerate(chunks):
-                    part = out_dir / f"seg_{int(seg_id):04d}.part{i:02d}.wav"
+                if len(chunks) == 1:
                     tts.tts_to_file(
-                        text=ch,
-                        file_path=str(part),
+                        text=text_ru,
+                        file_path=str(out_wav),
                         language=language,
                         speaker=default_speaker,
                         split_sentences=True,
                     )
-                    parts.append(part)
+                else:
+                    parts: List[Path] = []
 
-                concat_wavs(parts, out_wav, gap_ms=GAP_MS, subtype="PCM_16")
-                _cleanup_files(parts)
+                    # чистим возможные старые parts этого сегмента
+                    old_parts = sorted(out_dir.glob(f"seg_{int(seg_id):04d}.part*.wav"))
+                    if old_parts:
+                        _cleanup_files(old_parts)
 
-            ok += 1
+                    for i, ch in enumerate(chunks):
+                        part = out_dir / f"seg_{int(seg_id):04d}.part{i:02d}.wav"
+                        tts.tts_to_file(
+                            text=ch,
+                            file_path=str(part),
+                            language=language,
+                            speaker=default_speaker,
+                            split_sentences=True,
+                        )
+                        parts.append(part)
 
-        except Exception as ex:
-            failed += 1
-            error(f"[FAIL] seg_id={seg_id}: {ex}\n")
+                    concat_wavs(parts, out_wav, gap_ms=GAP_MS, subtype="PCM_16")
+                    _cleanup_files(parts)
+
+                ok += 1
+
+            except Exception as ex:
+                failed += 1
+                error(f"[FAIL] seg_id={seg_id}: {ex}\n")
+            continue
+
+        warn(f"Segment {seg_id} has empty 'text_ru', skipping\n")
+        skipped += 1
 
     info(f"[DONE] Russian TTS segments generated in: {out_dir}\n")
     info(f"Summary: ok={ok}, failed={failed}, skipped={skipped}\n")
