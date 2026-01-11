@@ -11,7 +11,7 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.config import PipelineConfig
 
 # =========================
-# Translation step (EN -> RU) version v3
+# Translation step (EN -> RU) Version 2.0
 # =========================
 #
 # Goals:
@@ -76,30 +76,30 @@ def _get_attr_path(obj, path: str, default=None):
     return cur
 
 
-def _is_gpu_enabled(cfg: PipelineConfig) -> bool:
-    """
-    Infers the global CPU/GPU flag from cfg.
-    Supports common layouts:
-      - cfg.use_gpu / cfg.usegpu
-      - cfg.runtime.use_gpu / cfg.runtime.usegpu
-      - cfg.device / cfg.runtime.device ("cuda"/"cpu")
-    """
-    # 1) Explicit flags
-    for key in ("use_gpu", "usegpu", "useGpu", "useGPU"):
-        v = _get_attr_path(cfg, key, None)
-        if v is not None:
-            return bool(v)
-        v = _get_attr_path(cfg, f"runtime.{key}", None)
-        if v is not None:
-            return bool(v)
-
-    # 2) Device strings
-    for key in ("device", "runtime.device"):
-        device = _get_attr_path(cfg, key, None)
-        if isinstance(device, str):
-            return device.lower().startswith(("cuda", "gpu"))
-
-    return False
+# def _is_gpu_enabled(cfg: PipelineConfig) -> bool:
+#     """
+#     Infers the global CPU/GPU flag from cfg.
+#     Supports common layouts:
+#       - cfg.use_gpu / cfg.usegpu
+#       - cfg.runtime.use_gpu / cfg.runtime.usegpu
+#       - cfg.device / cfg.runtime.device ("cuda"/"cpu")
+#     """
+#     # 1) Explicit flags
+#     for key in ("use_gpu", "usegpu", "useGpu", "useGPU"):
+#         v = _get_attr_path(cfg, key, None)
+#         if v is not None:
+#             return bool(v)
+#         v = _get_attr_path(cfg, f"runtime.{key}", None)
+#         if v is not None:
+#             return bool(v)
+#
+#     # 2) Device strings
+#     for key in ("device", "runtime.device"):
+#         device = _get_attr_path(cfg, key, None)
+#         if isinstance(device, str):
+#             return device.lower().startswith(("cuda", "gpu"))
+#
+#     return False
 
 
 def _pick_backend(cfg: PipelineConfig) -> str:
@@ -108,7 +108,7 @@ def _pick_backend(cfg: PipelineConfig) -> str:
         # If user forced HF but GPU is disabled, still allow HF on CPU.
         return forced
 
-    if _is_gpu_enabled(cfg):
+    if cfg.usegpu:
         # If CUDA isn't available at runtime, fall back to argos (CPU)
         try:
             import torch
@@ -240,42 +240,11 @@ def _load_hf_translator(device: str):
 
     tok = AutoTokenizer.from_pretrained(model_id)
 
-    # Prefer safetensors to avoid torch.load CVE gate (CVE-2025-32434)
-    # and to keep loads safer by default.
-    # Also note: transformers now prefers dtype= over torch_dtype=.
-    dtype = None
+    torch_dtype = None
     if device.startswith("cuda"):
-        dtype = torch.float16
+        torch_dtype = torch.float16
 
-    load_kwargs = {}
-    if dtype is not None:
-        load_kwargs["dtype"] = dtype
-
-    # 1) Try safetensors first (recommended)
-    try:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_id,
-            use_safetensors=True,
-            **load_kwargs
-        )
-    except Exception as e_sft:
-        # 2) Fallback to regular PyTorch weights (may require torch>=2.6 per transformers security check)
-        try:
-            model = AutoModelForSeq2SeqLM.from_pretrained(
-                model_id,
-                use_safetensors=False,
-                **load_kwargs
-            )
-        except Exception as e_bin:
-            raise RuntimeError(
-                "Failed to load HF translation model.\n"
-                "Most common cause right now: transformers blocks loading PyTorch .bin weights when torch<2.6 "
-                "because of CVE-2025-32434.\n\n"
-                "Fix options:\n"
-                "  A) Upgrade torch to >=2.6 (recommended)\n"
-                "  B) Install safetensors and ensure the model has .safetensors weights (we already try that first)\n\n"
-                f"Original errors:\n- safetensors load: {e_sft}\n- bin load: {e_bin}\n"
-            )
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_id, torch_dtype=torch_dtype)
     model.eval()
     model.to(device)
 
@@ -361,7 +330,7 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     if backend == "hf":
         try:
             import torch
-            if _is_gpu_enabled(cfg) and torch.cuda.is_available():
+            if cfg.usegpu and torch.cuda.is_available():
                 device = "cuda"
         except Exception:
             device = "cpu"

@@ -5,8 +5,10 @@ from pathlib import Path
 
 from ..config import PipelineConfig
 from dubpipeline.utils.logging import info, step, warn, error, debug
+from ..utils.timing import timed
 
 
+@timed("extract_audio", log=info)
 def run(cfg: PipelineConfig) -> None:
     """
     Шаг extract_audio:

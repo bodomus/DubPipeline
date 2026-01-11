@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import time
 import hashlib
 import sqlite3
 from pathlib import Path
@@ -11,32 +10,28 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.config import PipelineConfig
 
 # =========================
-# Translation step (EN -> RU) version v3
+# Translation step (EN -> RU) # Translation step (EN -> RU) Version 1.0
 # =========================
 #
 # Goals:
-# 1) Respect your current "global CPU/GPU" checkbox (single flag for the whole pipeline).
+# 1) Keep a single global CPU/GPU flag for the whole pipeline (as you asked).
 # 2) Speed up translation:
 #    - If GPU is enabled -> use HuggingFace seq2seq (batched, fp16 on CUDA).
-#    - If GPU is disabled -> use ArgosTranslate (CPU) + persistent cache.
-# 3) Add sqlite cache to avoid re-translating repeated strings across runs.
+#    - If GPU is disabled -> use ArgosTranslate (CPU) + cache.
+# 3) Add persistent cache (sqlite) to avoid re-translating the same strings.
 #
-# Env overrides (optional):
-#   DUBPIPELINE_TRANSLATE_BACKEND = "argos" | "hf"         (force backend)
-#   DUBPIPELINE_HF_MODEL          = "Helsinki-NLP/opus-mt-en-ru"
-#   DUBPIPELINE_TRANSLATE_BATCH   = "64"                  (HF batch size)
-#   DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS = "256"
+# Env overrides (optional, no config changes required):
+#   DUBPIPELINE_TRANSLATE_BACKEND = "argos" | "hf"   (force backend)
+#   DUBPIPELINE_HF_MODEL          = "Helsinki-NLP/opus-mt-en-ru" (default)
+#   DUBPIPELINE_TRANSLATE_BATCH   = "32"            (HF batch size)
 #   DUBPIPELINE_CACHE_DB          = "path/to/cache.sqlite"
 #
-# IMPORTANT:
-# - In your project you often use cfg.usegpu (without underscore). We detect BOTH: use_gpu and usegpu.
-# - ArgosTranslate is CPU-only (no CUDA acceleration).
-# - HF backend requires torch + transformers and will download the model once (cached by HF).
+# Notes:
+# - ArgosTranslate is CPU-only (no GPU acceleration).
+# - HF backend requires: torch + transformers (and will download the model).
+# - Cache key includes backend + model id -> safe when you switch models.
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
-
-# Module-level cache to avoid re-loading HF model/tokenizer multiple times in one process run.
-_HF_CACHE = {}  # (device, model_id) -> (tokenizer, model)
 
 
 def run(cfg: PipelineConfig):
@@ -78,26 +73,27 @@ def _get_attr_path(obj, path: str, default=None):
 
 def _is_gpu_enabled(cfg: PipelineConfig) -> bool:
     """
-    Infers the global CPU/GPU flag from cfg.
-    Supports common layouts:
-      - cfg.use_gpu / cfg.usegpu
-      - cfg.runtime.use_gpu / cfg.runtime.usegpu
-      - cfg.device / cfg.runtime.device ("cuda"/"cpu")
+    Tries to infer the global CPU/GPU flag from cfg.
+    Supports multiple possible attribute layouts without hard dependency.
     """
-    # 1) Explicit flags
-    for key in ("use_gpu", "usegpu", "useGpu", "useGPU"):
-        v = _get_attr_path(cfg, key, None)
-        if v is not None:
-            return bool(v)
-        v = _get_attr_path(cfg, f"runtime.{key}", None)
-        if v is not None:
-            return bool(v)
+    # Common patterns in configs:
+    # - cfg.use_gpu (bool)
+    # - cfg.device ("cpu"/"cuda")
+    # - cfg.runtime.use_gpu
+    # - cfg.runtime.device
+    use_gpu = _get_attr_path(cfg, "use_gpu", None)
+    if use_gpu is None:
+        use_gpu = _get_attr_path(cfg, "runtime.use_gpu", None)
 
-    # 2) Device strings
-    for key in ("device", "runtime.device"):
-        device = _get_attr_path(cfg, key, None)
-        if isinstance(device, str):
-            return device.lower().startswith(("cuda", "gpu"))
+    if use_gpu is not None:
+        return bool(use_gpu)
+
+    device = _get_attr_path(cfg, "device", None)
+    if device is None:
+        device = _get_attr_path(cfg, "runtime.device", None)
+
+    if isinstance(device, str):
+        return device.lower().startswith(("cuda", "gpu"))
 
     return False
 
@@ -105,21 +101,9 @@ def _is_gpu_enabled(cfg: PipelineConfig) -> bool:
 def _pick_backend(cfg: PipelineConfig) -> str:
     forced = os.getenv("DUBPIPELINE_TRANSLATE_BACKEND", "").strip().lower()
     if forced in {"argos", "hf"}:
-        # If user forced HF but GPU is disabled, still allow HF on CPU.
         return forced
 
-    if _is_gpu_enabled(cfg):
-        # If CUDA isn't available at runtime, fall back to argos (CPU)
-        try:
-            import torch
-            if torch.cuda.is_available():
-                return "hf"
-            warn("[WARN] GPU flag is ON, but torch.cuda.is_available() is False. Falling back to Argos.\n")
-        except Exception:
-            warn("[WARN] GPU flag is ON, but torch is not available. Falling back to Argos.\n")
-        return "argos"
-
-    return "argos"
+    return "hf" if _is_gpu_enabled(cfg) else "argos"
 
 
 # -------------------------
@@ -158,10 +142,11 @@ def _make_cache_key(backend: str, model_id: str, text: str) -> str:
 def _cache_get_many(con: sqlite3.Connection, keys: List[str]) -> Dict[str, str]:
     if not keys:
         return {}
+    # SQLite has a max vars limit; keep chunks small.
     out: Dict[str, str] = {}
-    CHUNK = 500  # SQLite max vars
+    CHUNK = 500
     for i in range(0, len(keys), CHUNK):
-        part = keys[i:i + CHUNK]
+        part = keys[i:i+CHUNK]
         q = ",".join("?" for _ in part)
         rows = con.execute(f"SELECT k, v FROM translations WHERE k IN ({q})", part).fetchall()
         out.update({k: v for k, v in rows})
@@ -206,9 +191,12 @@ def _ensure_argos_model_installed():
 
 
 def _translate_argos(texts: List[str]) -> List[str]:
-    """ArgosTranslate doesn't have true batching; cache gives the main speed-up."""
+    """ArgosTranslate doesn't have true batching; we keep it simple + rely on cache."""
     from argostranslate import translate
-    return [translate.translate(t, "en", "ru") for t in texts]
+    out = []
+    for t in texts:
+        out.append(translate.translate(t, "en", "ru"))
+    return out
 
 
 # -------------------------
@@ -231,77 +219,33 @@ def _load_hf_translator(device: str):
             "Install: pip install torch transformers"
         ) from e
 
-    cache_key = (device, model_id)
-    if cache_key in _HF_CACHE:
-        tok, model = _HF_CACHE[cache_key]
-        return model_id, tok, model
-
     step(f"Loading HF model: {model_id}\n")
-
     tok = AutoTokenizer.from_pretrained(model_id)
 
-    # Prefer safetensors to avoid torch.load CVE gate (CVE-2025-32434)
-    # and to keep loads safer by default.
-    # Also note: transformers now prefers dtype= over torch_dtype=.
-    dtype = None
+    # fp16 on CUDA usually speeds up and saves VRAM.
+    torch_dtype = None
     if device.startswith("cuda"):
-        dtype = torch.float16
+        torch_dtype = torch.float16
 
-    load_kwargs = {}
-    if dtype is not None:
-        load_kwargs["dtype"] = dtype
-
-    # 1) Try safetensors first (recommended)
-    try:
-        model = AutoModelForSeq2SeqLM.from_pretrained(
-            model_id,
-            use_safetensors=True,
-            **load_kwargs
-        )
-    except Exception as e_sft:
-        # 2) Fallback to regular PyTorch weights (may require torch>=2.6 per transformers security check)
-        try:
-            model = AutoModelForSeq2SeqLM.from_pretrained(
-                model_id,
-                use_safetensors=False,
-                **load_kwargs
-            )
-        except Exception as e_bin:
-            raise RuntimeError(
-                "Failed to load HF translation model.\n"
-                "Most common cause right now: transformers blocks loading PyTorch .bin weights when torch<2.6 "
-                "because of CVE-2025-32434.\n\n"
-                "Fix options:\n"
-                "  A) Upgrade torch to >=2.6 (recommended)\n"
-                "  B) Install safetensors and ensure the model has .safetensors weights (we already try that first)\n\n"
-                f"Original errors:\n- safetensors load: {e_sft}\n- bin load: {e_bin}\n"
-            )
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_id, torch_dtype=torch_dtype)
     model.eval()
     model.to(device)
 
-    # Optional minor speed-ups on newer PyTorch (safe no-ops otherwise)
-    try:
-        if device.startswith("cuda"):
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.set_float32_matmul_precision("high")
-    except Exception:
-        pass
-
-    _HF_CACHE[cache_key] = (tok, model)
     return model_id, tok, model
 
 
 def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
     import torch
 
-    batch_size = int(os.getenv("DUBPIPELINE_TRANSLATE_BATCH", "64"))
+    batch_size = int(os.getenv("DUBPIPELINE_TRANSLATE_BATCH", "32"))
     max_new_tokens = int(os.getenv("DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS", "256"))
 
+    results: List[str] = []
     # Sort by length to reduce padding -> speed
     order = sorted(range(len(texts)), key=lambda i: len(texts[i] or ""))
-    rank_of_original = [0] * len(texts)
-    for rank, orig_idx in enumerate(order):
-        rank_of_original[orig_idx] = rank
+    inv = [0] * len(order)
+    for rank, i in enumerate(order):
+        inv[i] = rank
     sorted_texts = [texts[i] for i in order]
 
     def _gen(batch: List[str]) -> List[str]:
@@ -314,33 +258,25 @@ def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
         )
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
+        # torch.inference_mode disables autograd; autocast helps on CUDA.
         if device.startswith("cuda"):
             with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
-                out_ids = model.generate(
-                    **inputs,
-                    num_beams=1,
-                    do_sample=False,
-                    max_new_tokens=max_new_tokens
-                )
+                out_ids = model.generate(**inputs, num_beams=1, do_sample=False, max_new_tokens=max_new_tokens)
         else:
             with torch.inference_mode():
-                out_ids = model.generate(
-                    **inputs,
-                    num_beams=1,
-                    do_sample=False,
-                    max_new_tokens=max_new_tokens
-                )
+                out_ids = model.generate(**inputs, num_beams=1, do_sample=False, max_new_tokens=max_new_tokens)
 
         return tok.batch_decode(out_ids, skip_special_tokens=True)
 
     tmp: List[str] = []
     for i in range(0, len(sorted_texts), batch_size):
-        tmp.extend(_gen(sorted_texts[i:i + batch_size]))
+        chunk = sorted_texts[i:i + batch_size]
+        tmp.extend(_gen(chunk))
 
     # Restore original order
     out = [""] * len(texts)
-    for orig_idx in range(len(texts)):
-        out[orig_idx] = tmp[rank_of_original[orig_idx]]
+    for orig_i, sorted_i in enumerate(inv):
+        out[orig_i] = tmp[sorted_i]
     return out
 
 
@@ -349,22 +285,10 @@ def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
 # -------------------------
 
 def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, backend: str):
-    t0 = time.perf_counter()
-
     with open(input_file, "r", encoding="utf-8") as f:
         segments = json.load(f)
 
-    # Decide translation device:
-    # - HF uses CUDA only if GPU flag is enabled AND torch.cuda.is_available() is True.
-    # - Argos is always CPU.
-    device = "cpu"
-    if backend == "hf":
-        try:
-            import torch
-            if _is_gpu_enabled(cfg) and torch.cuda.is_available():
-                device = "cuda"
-        except Exception:
-            device = "cpu"
+    device = "cuda" if (_is_gpu_enabled(cfg) and backend == "hf") else "cpu"
 
     # Cache DB path
     cache_db_env = os.getenv("DUBPIPELINE_CACHE_DB", "").strip()
@@ -372,10 +296,12 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     con = _open_cache(cache_path)
 
     # backend model id (part of cache key)
+    hf_ctx = None
     if backend == "hf":
         model_id, tok, model = _load_hf_translator(device=device)
+        hf_ctx = (model_id, tok, model)
     else:
-        model_id, tok, model = "argos-en-ru", None, None
+        model_id = "argos-en-ru"
 
     step(f"Using device for translation: {device}\n")
     info(f"[CACHE] {cache_path}\n")
@@ -407,20 +333,22 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     info(f"[INFO] Need translate: {len(misses)} (unique), {len(miss_indices)} (total)\n\n")
 
     # Translate missing unique texts
-    t_tr0 = time.perf_counter()
+    new_items: List[Tuple[str, str]] = []
     if misses:
         miss_keys = list(misses.keys())
         miss_texts = [misses[k] for k in miss_keys]
 
         if backend == "hf":
+            _model_id, tok, model = hf_ctx
             ru_texts = _translate_hf(miss_texts, tok=tok, model=model, device=device)
         else:
             ru_texts = _translate_argos(miss_texts)
 
-        new_items = list(zip(miss_keys, ru_texts))
+        for k, ru in zip(miss_keys, ru_texts):
+            new_items.append((k, ru))
+
         _cache_put_many(con, new_items)
         cached.update({k: v for k, v in new_items})
-    t_tr1 = time.perf_counter()
 
     # Build output (preserve ordering)
     translated = []
@@ -445,7 +373,5 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(translated, f, ensure_ascii=False, indent=2)
 
-    t1 = time.perf_counter()
     info(f"\n[OK] Translated {len(translated)} segments.\n")
     info(f"[SAVE] {output_file}\n")
-    info(f"[TIME] translate_core={t_tr1 - t_tr0:.2f}s, total_step={t1 - t0:.2f}s\n")
