@@ -86,12 +86,11 @@ def load_pipeline_config_ex(pipeline_file: Path) -> PipelineConfig:
     project_dir = pipeline_file.parent
 
     config = load_config(pipeline_file)
-    info("[INFO] [bold green]Load config_ex success...[/bold green]\n")
+    info("[INFO] Load config_ex success...\n")
     return apply_config(config, project_dir)
 
 def load_pipeline_config(pipeline_file: Path) -> PipelineConfig:
     """Загрузить и провалидировать *.pipeline.yaml, вернуть PipelineConfig."""
-    #sd = load_config(pipeline_file)
     if not pipeline_file.exists():
         raise FileNotFoundError(f"[ERROR] Не найден файл конфига: {pipeline_file}")
 
@@ -191,7 +190,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
     # --- Steps ---
     steps_dict: Dict[str, Any] = raw_cfg.get("steps", {}) or {}
     steps = StepsConfig(
-        extract_audio=bool(steps_dict.get("extract_audio", True)),
+        extract_audio=bool(steps_dict.get('extract_audio', True)),
         asr_whisperx=bool(steps_dict.get("asr_whisperx", False)),
         translate=bool(steps_dict.get("translate", False)),
         tts=bool(steps_dict.get("tts", False)),
@@ -270,7 +269,7 @@ def apply_config(raw_cfg: Dict, project_dir:str):
 
     return PipelineConfig(
         project_name=project_name,
-        project_dir=project_dir,
+        project_dir=Path(project_dir),
         paths=paths,
         steps=steps,
         tts=tts,

@@ -20,7 +20,7 @@ def run_ffmpeg(cmd: list[str]) -> None:
         error(result.stderr)
         raise SystemExit(result.returncode)
     else:
-        info("[OK] ffmpeg finished successfully\n")
+        info("[OK] ffmpeg finished successfully")
 
 
 def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg") -> None:

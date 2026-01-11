@@ -10,6 +10,7 @@ import soundfile as sf
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.logging import info, step, warn, error, debug
 
+DEBUG:bool = False
 
 def build_atempo_filter(total_factor: float) -> str:
     """
@@ -78,10 +79,8 @@ def align_segments(
         cur_dur = len(data) / sr
 
         diff = abs(cur_dur - target_dur)
-        info(
-            f"[ALIGN] id={seg_id} target={target_dur:.3f}s "
-            f"cur={cur_dur:.3f}s diff={diff:.3f}s\n"
-        )
+        if DEBUG:
+            info(f"[ALIGN] id={seg_id} target={target_dur:.3f}s cur={cur_dur:.3f}s diff={diff:.3f}s\n")
 
         # Если отличие маленькое (< eps), просто копируем файл
         if diff < eps:
@@ -116,7 +115,8 @@ def align_segments(
             error(result.stderr)
             # на всякий случай не падаем, а продолжаем
         else:
-            info(f"[OK] Aligned segment written: {out_wav}\n")
+            if DEBUG:
+                info(f"[OK] Aligned segment written: {out_wav}\n")
 
 
 def mix_aligned_segments_to_timeline(
@@ -153,7 +153,8 @@ def mix_aligned_segments_to_timeline(
     if sr is None:
         raise RuntimeError("No aligned WAVs found to determine sample rate")
 
-    warn(f"[MIX] Using sample rate={sr}, channels={channels}\n")
+    if DEBUG:
+        warn(f"[MIX] Using sample rate={sr}, channels={channels}\n")
 
     total_samples = int(math.ceil((max_end + 0.1) * sr))
     if channels == 1:
@@ -187,10 +188,11 @@ def mix_aligned_segments_to_timeline(
         cur_dur = len(data) / sr
         diff = abs(cur_dur - target_dur)
         if diff > 2 * eps:
-            warn(
-                f"After alignment, segment {seg_id} duration differs from "
-                f"target by {diff:.3f}s (cur={cur_dur:.3f}, target={target_dur:.3f})\n"
-            )
+            if DEBUG:
+                warn(
+                    f"After alignment, segment {seg_id} duration differs from "
+                    f"target by {diff:.3f}s (cur={cur_dur:.3f}, target={target_dur:.3f})\n"
+                )
 
         start_idx = int(round(start * sr))
         end_idx = start_idx + len(data)

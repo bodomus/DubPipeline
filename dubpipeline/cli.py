@@ -1,13 +1,15 @@
 from __future__ import annotations
-from dubpipeline.utils.logging import info, init_logger
 import argparse
 from pathlib import Path
 import shutil
 from typing import Callable
 import logging
-from .config import load_pipeline_config_ex
-from dubpipeline.steps import step_whisperx, step_translate, step_tts, step_align, step_merge_py
+
+from dubpipeline.steps import step_whisperx, step_tts, step_align, step_merge_py, step_translate
 from .steps import step_extract_audio
+from .config import load_pipeline_config_ex
+from dubpipeline.utils.logging import info, init_logger
+from dubpipeline.utils.timing import timed_run, timed_block
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,38 +83,49 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
     # сегменты целиком
     shutil.rmtree(out_dir / "segments", ignore_errors=True)
 
-
+# важно: info должна быть уже доступна в момент объявления функции
+# (декоратор выполняется при импорте модуля)
+@timed_run(log=info, run_name="RUN", top_n=50)
 def run_pipeline(cfg, pipeline_path: Path) -> None:
     success = False
+
     if cfg.rebuild:
-        # если у вас уже есть rebuild_cleanup(cfg) — используйте её
-        # rebuild_cleanup(cfg)
-        rebuild_cleanup_safe(cfg)
+        with timed_block("00_rebuild_cleanup", log=info):
+            rebuild_cleanup_safe(cfg)
 
     def tts_and_align(c) -> None:
-        step_tts.run(c)
-        step_align.run(c)
+        # хотите видеть отдельно tts и align — делаем два блока
+        with timed_block("04a_tts", log=info):
+            step_tts.run(c)
+        with timed_block("04b_align", log=info):
+            step_align.run(c)
 
     steps: list[tuple[str, bool, Callable]] = [
-        ("extract_audio", cfg.steps.extract_audio, step_extract_audio.run),
-        ("asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
-        ("translate", cfg.steps.translate, step_translate.run),
-        ("tts", cfg.steps.tts, tts_and_align),
-        ("merge", cfg.steps.merge, step_merge_py.run),
+        ("01_extract_audio", cfg.steps.extract_audio, step_extract_audio.run),
+        ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
+        ("03_translate",     cfg.steps.translate,     step_translate.run),
+        ("04_tts+align",     cfg.steps.tts,           tts_and_align),
+        ("05_merge",         cfg.steps.merge,         step_merge_py.run),
     ]
 
     for name, enabled, fn in steps:
         if not enabled:
             info(f"[dubpipeline] Шаг {name} отключён в конфиге.")
             continue
-        fn(cfg)
+
+        # вот это и есть “замер всех наших шагов”
+        with timed_block(name, log=info):
+            fn(cfg)
 
     if cfg.delete_srt:
-        Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
+        with timed_block("99_delete_srt", log=info):
+            Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
 
     success = True
+
     if success and getattr(cfg, "cleanup", False):
-        cleanup_garbage(cfg, pipeline_path)
+        with timed_block("99_cleanup_garbage", log=info):
+            cleanup_garbage(cfg, pipeline_path)
 
 
 def rebuild_cleanup(cfg):

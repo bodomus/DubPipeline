@@ -28,7 +28,6 @@ LOG_LINE_RE = re.compile(
     r"(?P<msg>.*)$"                          # остальное — сообщение
 )
 
-
 LEVEL_COLORS = {
     "DEBUG": "darkblue",          # по умолчанию
     "INFO":  "green",
@@ -36,7 +35,6 @@ LEVEL_COLORS = {
     "WARN":  "orange",
     "ERROR": "red",
 }
-
 
 def print_parsed_log(window, line: str) -> None:
     ml = window["-LOGBOX-"]

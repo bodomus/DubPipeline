@@ -9,7 +9,9 @@ import soundfile as sf
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.logging import info, step, warn, error
+from dubpipeline.utils.timing import timed
 
+DEBUG:bool = False
 
 def build_atempo_filter(total_factor: float) -> str:
     """
@@ -78,10 +80,8 @@ def align_segments(
         cur_dur = len(data) / sr
 
         diff = abs(cur_dur - target_dur)
-        info(
-            f"[ALIGN] id={seg_id} target={target_dur:.3f}s "
-            f"cur={cur_dur:.3f}s diff={diff:.3f}s"
-        )
+        if DEBUG:
+            info(f"[ALIGN] id={seg_id} target={target_dur:.3f}s cur={cur_dur:.3f}s diff={diff:.3f}s\n")
 
         # Если отличие маленькое (< eps), просто копируем файл
         if diff < eps:
@@ -90,7 +90,7 @@ def align_segments(
 
         factor = cur_dur / target_dur
         filter_str = build_atempo_filter(factor)
-        info(f"        atempo factor={factor:.4f} -> filter: {filter_str}")
+        info(f"atempo factor={factor:.4f} -> filter: {filter_str}\n")
 
         cmd = [
             ffmpeg_path,
@@ -116,7 +116,8 @@ def align_segments(
             error(result.stderr)
             # на всякий случай не падаем, а продолжаем
         else:
-            info(f"Aligned segment written: {out_wav}")
+            if DEBUG:
+                info(f"[OK] Aligned segment written: {out_wav}\n")
 
 
 def mix_aligned_segments_to_timeline(
@@ -153,7 +154,8 @@ def mix_aligned_segments_to_timeline(
     if sr is None:
         raise RuntimeError("No aligned WAVs found to determine sample rate")
 
-    info(f"[MIX] Using sample rate={sr}, channels={channels}")
+    if DEBUG:
+        warn(f"[MIX] Using sample rate={sr}, channels={channels}\n")
 
     total_samples = int(math.ceil((max_end + 0.1) * sr))
     if channels == 1:
@@ -211,8 +213,9 @@ def mix_aligned_segments_to_timeline(
     sf.write(out_wav, timeline, sr)
     info(f"Mixed timeline written to: {out_wav}")
 
-
+@timed("step_align", log=info)
 def run(cfg:PipelineConfig):
+
     segments_path = Path(cfg.paths.segments_ru_file)
     tts_dir = Path(cfg.paths.segments_path)
     aligned_dir = Path(cfg.paths.segments_align_path)
