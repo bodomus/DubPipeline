@@ -16,6 +16,20 @@ from dubpipeline.steps.step_tts import getVoices
 from dubpipeline.utils.logging import  info
 
 
+import os
+
+
+def show_app_constants():
+    print(f'### DUBPIPELINE_TTS_MAX_RU_CHARS: {os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS")}')
+    print(f'###DUBPIPELINE_TTS_TRY_SINGLE_CALL: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL")}')
+    print(f'### DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS")}')
+    print(f'### DUBPIPELINE_MIN_SEG_DUR: {os.getenv("DUBPIPELINE_MIN_SEG_DUR")}')
+    print(f'### DUBPIPELINE_MIN_SEG_CHARS: {os.getenv("DUBPIPELINE_MIN_SEG_CHARS")}')
+    print(f'### DUBPIPELINE_MERGE_MAX_GAP: {os.getenv("DUBPIPELINE_MERGE_MAX_GAP")}')
+    print(f'### DUBPIPELINE_MAX_SEG_DUR: {os.getenv("DUBPIPELINE_MAX_SEG_DUR")}')
+    print(f'### DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER: {os.getenv("DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER")}')
+
+
 USE_SUBPROCESS = True
 
 TEMPLATE_PATH = Path(__file__).with_name("video.pipeline.yaml")
@@ -137,6 +151,7 @@ def run_pipeline_sequence(run_items, window):
 
 
 def main():
+    show_app_constants()
     sg.theme("SystemDefault")
     mpeg_modes = ("Замена", "Добавление")
     voices = getVoices()

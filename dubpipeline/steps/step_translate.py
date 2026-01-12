@@ -11,7 +11,7 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.config import PipelineConfig
 
 # =========================
-# Translation step (EN -> RU) version v3
+# Translation step (EN -> RU)
 # =========================
 #
 # Goals:
@@ -449,3 +449,30 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     info(f"\n[OK] Translated {len(translated)} segments.\n")
     info(f"[SAVE] {output_file}\n")
     info(f"[TIME] translate_core={t_tr1 - t_tr0:.2f}s, total_step={t1 - t0:.2f}s\n")
+    # Optional: release VRAM after HF translate so XTTS/align can use more memory.
+    # Enabled by default when using HF+CUDA. Disable with:
+    #   set DUBPIPELINE_TRANSLATE_RELEASE_VRAM=0
+    if backend == "hf" and device.startswith("cuda"):
+        release = os.getenv("DUBPIPELINE_TRANSLATE_RELEASE_VRAM", "1").strip().lower()
+        if release not in {"0", "false", "no", "off"}:
+            try:
+                import gc
+                import torch
+                # Drop from module cache first (otherwise the model remains referenced).
+                try:
+                    _HF_CACHE.pop((device, model_id), None)
+                except Exception:
+                    pass
+                try:
+                    model.to("cpu")
+                except Exception:
+                    pass
+                try:
+                    del model
+                except Exception:
+                    pass
+                torch.cuda.empty_cache()
+                gc.collect()
+                info("[VRAM] Released CUDA cache after translate.\n")
+            except Exception as e:
+                warn(f"[VRAM] Failed to release CUDA cache: {e}\n")
