@@ -138,6 +138,8 @@ def rebuild_cleanup(cfg):
 
 
 def main() -> None:
+
+    print("DUB-19 ")
     parser = build_parser()
     args = parser.parse_args()
 
