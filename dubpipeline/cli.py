@@ -157,7 +157,7 @@ def main() -> None:
     cfg = load_pipeline_config_ex(pipeline_path, cli_set=args.set)
     Const.bind(cfg)
 
-    log_path = Path(cfg.paths.audio_wav).parent / f"{cfg.project_name}.log"
+    log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
     init_logger(log_path)
 
     commands: dict[str, Callable] = {

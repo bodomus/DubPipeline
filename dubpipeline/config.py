@@ -404,6 +404,9 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path) -> PathsConfig:
     if not out_dir.is_absolute():
         out_dir = (workdir / out_dir).resolve()
 
+    p = Path(out_dir)
+    p.mkdir(parents=True, exist_ok=True)
+
     # input_video can be at root or in paths; prefer paths.input_video
     input_video_s = paths.get("input_video") or raw.get("input_video") or "{project_name}.mp4"
     variables = {
@@ -476,7 +479,7 @@ def load_pipeline_config_ex(
     if not pipeline_file.exists():
         raise FileNotFoundError(f"Config not found: {pipeline_file}")
 
-    project_dir = pipeline_file.parent.resolve()
+    project_dir = pipeline_file.parent.parent.resolve()
 
     # yaml
     with pipeline_file.open("r", encoding="utf-8") as f:

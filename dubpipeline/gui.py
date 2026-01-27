@@ -260,6 +260,8 @@ def main():
             # Строка статуса (и для одиночного файла, и для папки)
             if total and idx:
                 window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
+                window["-PROJECT-"].update(name)
+                window["-IN-"].update(name)
             else:
                 window["-STATUS-"].update(f"Статус: running — {name}")
 

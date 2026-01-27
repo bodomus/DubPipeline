@@ -14,7 +14,7 @@ __pycache__/
 # Distribution / packaging
 .arc/
 .Python
-.profilers
+.profilers/
 compare/
 scripts/improvements
 build/
