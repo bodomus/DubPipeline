@@ -12,7 +12,11 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+.arc/
 .Python
+.profilers/
+compare/
+scripts/improvements
 build/
 develop-eggs/
 dist/
@@ -165,7 +169,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 .vs/
-.idea/
 .vscode/
 
 stabilityai/
