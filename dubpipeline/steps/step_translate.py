@@ -4,11 +4,13 @@ import re
 import time
 import hashlib
 import sqlite3
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.config import PipelineConfig
+from dubpipeline.consts import Const
 
 # =========================
 # Translation step (EN -> RU)
@@ -28,12 +30,77 @@ from dubpipeline.config import PipelineConfig
 #   DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS = "256"
 #   DUBPIPELINE_CACHE_DB          = "path/to/cache.sqlite"
 #
+#   DUBPIPELINE_TRANSLATE_SENT_FALLBACK = "1" | "0"  (default: 1)
 # IMPORTANT:
 # - In your project you often use cfg.usegpu (without underscore). We detect BOTH: use_gpu and usegpu.
 # - ArgosTranslate is CPU-only (no CUDA acceleration).
 # - HF backend requires torch + transformers and will download the model once (cached by HF).
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
+
+def _find_weird_chars(s: str):
+    """Find control/format/line-separator unicode chars that can break translation."""
+    out = []
+    for pos, ch in enumerate(s or ""):
+        cat = unicodedata.category(ch)
+        # Cc = control, Cf = format (zero-width), Zl/Zp = line/paragraph separators
+        if cat in ("Cc", "Cf", "Zl", "Zp"):
+            out.append((pos, f"U+{ord(ch):04X}", cat, unicodedata.name(ch, "")))
+    return out
+
+
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+", re.UNICODE)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Parse environment variable flags like 1/0, true/false, yes/no."""
+    raw = os.getenv(name, None)
+    if raw is None:
+        return default
+    v = str(raw).strip().lower()
+    if v in {"1", "true", "yes", "y", "on"}:
+        return True
+    if v in {"0", "false", "no", "n", "off", ""}:
+        return False
+    return default
+
+
+def _sent_count(text: str) -> int:
+    t = _normalize_text(text)
+    if not t:
+        return 0
+    parts = [p for p in _SENT_SPLIT.split(t) if p.strip()]
+    return len(parts) if parts else 1
+
+def _split_sentences(text: str) -> List[str]:
+    t = _normalize_text(text)
+    if not t:
+        return []
+    parts = [p.strip() for p in _SENT_SPLIT.split(t) if p.strip()]
+    return parts or [t]
+
+def _looks_truncated(src: str, ru: str) -> bool:
+    """
+    Heuristic: detect when translation likely stopped early.
+    Typical symptom: source has 2+ sentences, but RU has fewer.
+    """
+    src_n = _normalize_text(src)
+    ru_n = _normalize_text(ru)
+    if not src_n:
+        return False
+    if not ru_n:
+        return True
+
+    sc = _sent_count(src_n)
+    rc = _sent_count(ru_n)
+    if sc >= 2 and rc < sc:
+        return True
+
+    # Safety net for longer segments: RU too short compared to EN.
+    if len(src_n) >= 120 and len(ru_n) < int(0.35 * len(src_n)):
+        return True
+
+    return False
 
 # Module-level cache to avoid re-loading HF model/tokenizer multiple times in one process run.
 _HF_CACHE = {}  # (device, model_id) -> (tokenizer, model)
@@ -103,7 +170,7 @@ def _is_gpu_enabled(cfg: PipelineConfig) -> bool:
 
 
 def _pick_backend(cfg: PipelineConfig) -> str:
-    forced = os.getenv("DUBPIPELINE_TRANSLATE_BACKEND", "").strip().lower()
+    forced = str(cfg.translate.backend or "").strip().lower()
     if forced in {"argos", "hf"}:
         # If user forced HF but GPU is disabled, still allow HF on CPU.
         return forced
@@ -205,22 +272,33 @@ def _ensure_argos_model_installed():
     raise RuntimeError("Could not download Argos EN→RU model.")
 
 
-def _translate_argos(texts: List[str]) -> List[str]:
-    """ArgosTranslate doesn't have true batching; cache gives the main speed-up."""
+def _translate_argos(texts: List[str], *, sent_fallback: bool) -> List[str]:
+    """ArgosTranslate (CPU). No true batching; cache provides most speed-up."""
     from argostranslate import translate
-    return [translate.translate(t, "en", "ru") for t in texts]
+
+    out: List[str] = []
+    for src in texts:
+        ru = translate.translate(src, "en", "ru")
+        if sent_fallback and _looks_truncated(src, ru):
+            parts = _split_sentences(src)
+            if len(parts) > 1:
+                ru_parts = [translate.translate(p, "en", "ru") for p in parts]
+                ru = " ".join(p.strip() for p in ru_parts if p and p.strip()).strip()
+        out.append(ru)
+    return out
 
 
 # -------------------------
 # HuggingFace (GPU/CPU)
 # -------------------------
+# -------------------------
 
-def _load_hf_translator(device: str):
+def _load_hf_translator(cfg: PipelineConfig, device: str):
     """
     Lazy-load tokenizer+model for HF translation.
     Default model: opus-mt-en-ru (fast and decent for EN->RU).
     """
-    model_id = os.getenv("DUBPIPELINE_HF_MODEL", "Helsinki-NLP/opus-mt-en-ru").strip()
+    model_id = str(cfg.translate.hf_model).strip()
 
     try:
         import torch
@@ -291,11 +369,18 @@ def _load_hf_translator(device: str):
     return model_id, tok, model
 
 
-def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
+def _translate_hf(cfg: PipelineConfig, texts: List[str], tok, model, device: str, *, sent_fallback: bool) -> List[str]:
     import torch
 
-    batch_size = int(os.getenv("DUBPIPELINE_TRANSLATE_BATCH", "64"))
-    max_new_tokens = int(os.getenv("DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS", "256"))
+    batch_size = int(cfg.translate.batch_size)
+    max_new_tokens = int(cfg.translate.max_new_tokens)
+
+    for idx, t in enumerate(texts):
+        if t and "After Effects" in t:
+            debug(f"[SRC {idx}] repr={t!r}")
+            bad = [(pos, hex(ord(ch))) for pos, ch in enumerate(t) if ord(ch) < 32 or ord(ch) == 127]
+            debug(f"[SRC {idx}] control_chars={bad}")
+
 
     # Sort by length to reduce padding -> speed
     order = sorted(range(len(texts)), key=lambda i: len(texts[i] or ""))
@@ -304,7 +389,7 @@ def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
         rank_of_original[orig_idx] = rank
     sorted_texts = [texts[i] for i in order]
 
-    def _gen(batch: List[str]) -> List[str]:
+    def _gen_raw(batch: List[str]) -> List[str]:
         inputs = tok(
             batch,
             return_tensors="pt",
@@ -312,6 +397,10 @@ def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
             truncation=True,
             max_length=512,
         )
+
+        # токены входа (макс длина в батче)
+        in_len = int(inputs["input_ids"].shape[1])
+        debug(f"[GEN] input_max_tokens={in_len}")
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
         if device.startswith("cuda"):
@@ -331,11 +420,42 @@ def _translate_hf(texts: List[str], tok, model, device: str) -> List[str]:
                     max_new_tokens=max_new_tokens
                 )
 
-        return tok.batch_decode(out_ids, skip_special_tokens=True)
+        out = tok.batch_decode(out_ids, skip_special_tokens=True)
+
+        # токены выхода (макс длина)
+        out_len = int(out_ids.shape[1])
+        debug(f"[GEN] output_max_tokens={out_len}")
+        debug(f"[GEN] sample_out_0={repr(out[0])[:240]}")
+        return out
+
+    def _gen(batch: List[str]) -> List[str]:
+        # покажем max_new_tokens и пару примеров входа
+        debug(f"[GEN] batch={len(batch)} max_new_tokens={max_new_tokens}")
+        debug(f"[GEN] sample_in_0={repr(batch[0])[:240]}")
+
+        out = _gen_raw(batch)
+
+        # Fallback: если модель преждевременно завершила генерацию (2+ предложений -> меньше в RU),
+        # переводим по предложениям и склеиваем.
+        fixed: List[str] = []
+        for src, ru in zip(batch, out):
+            if _looks_truncated(src, ru):
+                parts = _split_sentences(src)
+                if len(parts) > 1:
+                    debug(f"[GEN] truncated detected -> sentence fallback (parts={len(parts)})")
+                    ru_parts: List[str] = []
+                    for j in range(0, len(parts), batch_size):
+                        ru_parts.extend(_gen_raw(parts[j:j + batch_size]))
+                    ru = " ".join(p.strip() for p in ru_parts if p and p.strip()).strip()
+            fixed.append(ru)
+        return fixed
+
 
     tmp: List[str] = []
     for i in range(0, len(sorted_texts), batch_size):
-        tmp.extend(_gen(sorted_texts[i:i + batch_size]))
+        debug(f"{i}: len(sorted_texts):{len(sorted_texts)} batch_size:{batch_size} ")
+        g = _gen(sorted_texts[i:i + batch_size])
+        tmp.extend(g)
 
     # Restore original order
     out = [""] * len(texts)
@@ -367,24 +487,43 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
             device = "cpu"
 
     # Cache DB path
-    cache_db_env = os.getenv("DUBPIPELINE_CACHE_DB", "").strip()
+    cache_db_env = str(cfg.translate.cache_db or "").strip()
     cache_path = Path(cache_db_env) if cache_db_env else _default_cache_path(output_file)
     con = _open_cache(cache_path)
 
     # backend model id (part of cache key)
     if backend == "hf":
-        model_id, tok, model = _load_hf_translator(device=device)
+        model_id, tok, model = _load_hf_translator(cfg, device=device)
     else:
         model_id, tok, model = "argos-en-ru", None, None
 
     step(f"Using device for translation: {device}\n")
     info(f"[CACHE] {cache_path}\n")
+    # Sentence-fallback (default ON). Disable with:
+    #   DUBPIPELINE_TRANSLATE_SENT_FALLBACK=0
+    sent_fallback = _env_flag("DUBPIPELINE_TRANSLATE_SENT_FALLBACK", default=True)
+    info(f"[INFO] Sentence fallback: {'ON' if sent_fallback else 'OFF'}\n")
 
     # Prepare texts + keys
     texts: List[str] = []
     keys: List[str] = []
-    for seg in segments:
+
+    # Enable invisible-char diagnostics via env:
+    #   DUBPIPELINE_TRANSLATE_DEBUG_CHARS=1
+    debug_chars = str(os.getenv("DUBPIPELINE_TRANSLATE_DEBUG_CHARS", "")).strip().lower() not in {"", "0", "false", "no"}
+
+
+    for idx, seg in enumerate(segments):
         t = seg.get("text", "") or ""
+
+        # DEBUG: detect control/format/line-separator chars that can cause truncated translations
+        if debug_chars:
+            weird = _find_weird_chars(t)
+            if weird or ("After Effects" in t):
+                debug(f"[WEIRD] seg#{idx} repr={t!r}")
+                if weird:
+                    debug(f"[WEIRD] seg#{idx} chars={weird}")
+
         texts.append(t)
         keys.append(_make_cache_key(backend, model_id, t))
 
@@ -394,16 +533,27 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     # Collect misses (unique by key to reduce duplicate work)
     misses: Dict[str, str] = {}  # key -> original text
     miss_indices: List[int] = []
-    for i, (k, t) in enumerate(zip(keys, texts)):
-        if not _normalize_text(t):
+    bad_cache = 0
+
+    for i, (k, t_src) in enumerate(zip(keys, texts)):
+        if not _normalize_text(t_src):
             continue
-        if k not in cached and k not in misses:
-            misses[k] = t
-        if k not in cached:
+
+        cached_ru = cached.get(k)
+        is_bad_cached = False
+        if sent_fallback and cached_ru is not None:
+            is_bad_cached = _looks_truncated(t_src, cached_ru)
+
+        if cached_ru is None or is_bad_cached:
+            if is_bad_cached:
+                bad_cache += 1
+            if k not in misses:
+                misses[k] = t_src
             miss_indices.append(i)
 
     info(f"[INFO] Segments: {len(segments)}\n")
     info(f"[INFO] Cache hits: {len(cached)}\n")
+    info(f"[INFO] Bad cache entries: {bad_cache}\n")
     info(f"[INFO] Need translate: {len(misses)} (unique), {len(miss_indices)} (total)\n\n")
 
     # Translate missing unique texts
@@ -413,9 +563,9 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
         miss_texts = [misses[k] for k in miss_keys]
 
         if backend == "hf":
-            ru_texts = _translate_hf(miss_texts, tok=tok, model=model, device=device)
+            ru_texts = _translate_hf(cfg, miss_texts, tok=tok, model=model, device=device, sent_fallback=sent_fallback)
         else:
-            ru_texts = _translate_argos(miss_texts)
+            ru_texts = _translate_argos(miss_texts, sent_fallback=sent_fallback)
 
         new_items = list(zip(miss_keys, ru_texts))
         _cache_put_many(con, new_items)
@@ -453,7 +603,7 @@ def translate_segments(cfg: PipelineConfig, input_file: str, output_file: str, b
     # Enabled by default when using HF+CUDA. Disable with:
     #   set DUBPIPELINE_TRANSLATE_RELEASE_VRAM=0
     if backend == "hf" and device.startswith("cuda"):
-        release = os.getenv("DUBPIPELINE_TRANSLATE_RELEASE_VRAM", "1").strip().lower()
+        release = str(cfg.translate.release_vram).strip().lower()
         if release not in {"0", "false", "no", "off"}:
             try:
                 import gc

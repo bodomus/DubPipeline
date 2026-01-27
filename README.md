@@ -93,3 +93,29 @@ python .\tools\mux_ru_audio.py ^
   --out out\lecture_sample.ru.with_both.mkv ^
   --mode add
 
+
+# Опции
+
+##### Включить явно (не обязательно, он и так включён):
+$env:DUBPIPELINE_TRANSLATE_SENT_FALLBACK="1"
+
+##### Отключить
+$env:DUBPIPELINE_TRANSLATE_SENT_FALLBACK="0"
+
+##### включает попытку синтезировать сегмент TTS одним вызовом
+DUBPIPELINE_TTS_TRY_SINGLE_CALL
+
+##### задаёт лимит символов для этой попытки; если не проходит — текст режется на чанки.
+DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS  
+
+##### максимальный размер одного русского чанка для TTS (влияет на количество part-файлов и стабильность/качество)
+DUBPIPELINE_TTS_MAX_RU_CHARS 
+
+##### включить/выключить склейку хвостов (дефолт 1)
+DUBPIPELINE_WHISPERX_MERGE_DANGLING=1/0
+
+##### максимальный разрыв между сегментами (сек)
+DUBPIPELINE_WHISPERX_DANGLING_MAX_GAP=0.60
+
+##### максимум слов в следующем коротком сегменте
+DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6 

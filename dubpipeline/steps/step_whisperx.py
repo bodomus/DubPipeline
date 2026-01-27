@@ -5,11 +5,14 @@ from ..config import PipelineConfig
 import os
 import json
 import pathlib
+import re
+from typing import List
 
 import torch
 import whisperx
 from rich import print
 from dubpipeline.utils.logging import info, step, warn, error, debug
+from dubpipeline.consts import Const
 
 # === НАСТРОЙКИ =================================================================
 
@@ -17,11 +20,8 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 #AUDIO_PATH = Path()
 
 # Модель Whisper / Faster-Whisper через whisperx
-MODEL_NAME = "large-v3"                  # как в вашем тесте
-BATCH_SIZE = 1
 
 # Порог склейки слов в один сегмент (секунды)
-MAX_GAP_BETWEEN_WORDS = 0.8
 
 # OUTPUT_SRT = "out/video_sample.from_segments.en.srt"
 
@@ -170,6 +170,69 @@ def post_merge_segments_for_tts(
     return merged
 
 
+
+# --- EXTRA POST-PROCESS: merge "dangling tail" segments -------------------
+_DANGLING_END = {
+    "with", "to", "and", "or", "so", "but", "because", "for",
+    "of", "in", "on", "at", "from", "as", "by", "into", "over", "under",
+}
+_PUNCT_STRIP = ' \t\r\n.,!?;:()[]{}"\'“”‘’'
+
+def merge_dangling_segments(
+    segments: list[dict],
+    *,
+    max_gap: float = 0.60,
+    max_next_words: int = 6,
+    require_same_speaker: bool = True,
+) -> list[dict]:
+    """
+    Склейка "висячих хвостов" между соседними сегментами.
+    Пример: "So starting here with" + "simple opaque water."
+
+    Почему нужно: перевод/TTС идут по сегментам независимо и часто "теряют" хвост
+    у обрубков без контекста.
+    """
+    if not segments:
+        return []
+
+    # На всякий случай сортируем по времени начала
+    segs = [dict(s) for s in sorted(segments, key=lambda s: float(s.get('start', 0.0)))]
+
+    out: list[dict] = []
+    i = 0
+    while i < len(segs):
+        cur = segs[i]
+
+        if i + 1 < len(segs):
+            nxt = segs[i + 1]
+            cur_end = float(cur.get('end', float(cur.get('start', 0.0))))
+            nxt_start = float(nxt.get('start', cur_end))
+            gap = nxt_start - cur_end
+
+            if gap >= 0.0 and gap <= float(max_gap):
+                if (not require_same_speaker) or (cur.get('speaker') == nxt.get('speaker')):
+                    cur_text = (cur.get('text') or '').strip()
+                    nxt_text = (nxt.get('text') or '').strip()
+
+                    # last word of current segment (strip punctuation)
+                    tail = cur_text.rstrip(_PUNCT_STRIP)
+                    parts = tail.split()
+                    last_word = (parts[-1].lower() if parts else '')
+
+                    nxt_words = len(nxt_text.split())
+                    if last_word in _DANGLING_END and 0 < nxt_words <= int(max_next_words):
+                        # merge nxt into cur
+                        cur['text'] = (cur_text + ' ' + nxt_text).strip()
+                        cur['end'] = float(nxt.get('end', cur_end))
+                        i += 2
+                        out.append(cur)
+                        continue
+
+        out.append(cur)
+        i += 1
+
+    return out
+
 # === ОСНОВНОЙ PIPELINE =========================================================
 
 def run(cfg:PipelineConfig):
@@ -197,10 +260,10 @@ def run(cfg:PipelineConfig):
 
     # 2) ASR (Whisper / Faster-Whisper через whisperx)
     step("Loading ASR model...\n")
-    model = whisperx.load_model(MODEL_NAME, device, compute_type=compute_type)
+    model = whisperx.load_model(Const.whisperx_model_name(), device, compute_type=compute_type)
 
     step("Transcribing...\n")
-    result = model.transcribe(audio, batch_size=BATCH_SIZE)
+    result = model.transcribe(audio, batch_size=Const.whisperx_batch_size())
     # result["segments"] — фразовые сегменты (без выравнивания по словам)
     segments = result["segments"]
     info(f"Segments: {len(segments)}\n")
@@ -262,11 +325,11 @@ def run(cfg:PipelineConfig):
 
     # 7) Склеиваем слова в более крупные сегменты по спикеру + паузам
     step("[STEP] Merging words to segments...\n")
-    wm_max_seg_dur = float(os.getenv("DUBPIPELINE_WORD_MERGE_MAX_SEG_DUR", "20.0"))
-    wm_max_seg_chars = int(os.getenv("DUBPIPELINE_WORD_MERGE_MAX_SEG_CHARS", "350"))
+    wm_max_seg_dur = float(cfg.whisperx.word_merge.max_seg_dur)
+    wm_max_seg_chars = int(cfg.whisperx.word_merge.max_seg_chars)
     segments = merge_words_to_segments(
         words,
-        max_gap=MAX_GAP_BETWEEN_WORDS,
+        max_gap=Const.whisperx_max_gap_between_words(),
         max_seg_dur=wm_max_seg_dur,
         max_seg_chars=wm_max_seg_chars,
     )
@@ -274,11 +337,11 @@ def run(cfg:PipelineConfig):
     # 7.1) Пост-склейка для ускорения TTS (опционально, по env)
     raw_n = len(segments)
     try:
-        min_seg_dur = float(os.getenv("DUBPIPELINE_MIN_SEG_DUR", "1.0"))
-        min_seg_chars = int(os.getenv("DUBPIPELINE_MIN_SEG_CHARS", "25"))
-        max_merge_gap = float(os.getenv("DUBPIPELINE_MERGE_MAX_GAP", "0.35"))
-        max_seg_dur = float(os.getenv("DUBPIPELINE_MAX_SEG_DUR", "12.0"))
-        allow_cross = os.getenv("DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER", "1").strip().lower() not in {"0", "false", "no", "off"}
+        min_seg_dur = float(cfg.whisperx.word_merge.min_seg_dur)
+        min_seg_chars = int(cfg.whisperx.word_merge.min_seg_chars)
+        max_merge_gap = float(cfg.whisperx.word_merge.merge_max_gap)
+        max_seg_dur = float(cfg.whisperx.word_merge.max_seg_dur_post)
+        allow_cross = bool(cfg.whisperx.word_merge.allow_cross_speaker)
         segments = post_merge_segments_for_tts(
             segments,
             min_seg_dur=min_seg_dur,
@@ -292,6 +355,28 @@ def run(cfg:PipelineConfig):
 
     info(f"[INFO] Segments raw={raw_n}, post={len(segments)}\n")
 
+    # 7.2) Склейка "висячих хвостов" (dangling tails), чтобы не терять контекст на переводе/TTS.
+    # Управляется env: DUBPIPELINE_WHISPERX_MERGE_DANGLING=1/0 (по умолчанию включено).
+    merge_dangling = os.environ.get('DUBPIPELINE_WHISPERX_MERGE_DANGLING', '1').strip().lower()
+    if merge_dangling not in {'0', 'false', 'no', 'off'}:
+        try:
+            max_gap = float(os.environ.get('DUBPIPELINE_WHISPERX_DANGLING_MAX_GAP', '1.20'))
+        except Exception:
+            max_gap = 1.20
+        try:
+            max_next_words = int(os.environ.get('DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS', '6'))
+        except Exception:
+            max_next_words = 6
+        before_d = len(segments)
+        segments = merge_dangling_segments(segments, max_gap=max_gap, max_next_words=max_next_words, require_same_speaker=True)
+        after_d = len(segments)
+        if after_d != before_d:
+            info(f"[INFO] Segments dangling-merge: {before_d} -> {after_d} (max_gap={max_gap}, max_next_words={max_next_words})\n")
+
+    # 7.3) Проставляем стабильные id (единый источник истины для следующих шагов)
+    for i, s in enumerate(segments):
+        s['id'] = i
+
     # 8) Сохраняем результаты
     info(f"[SAVE] Segments → {cfg.paths.segments_file}")
     with open(pathlib.Path(cfg.paths.segments_file), "w", encoding="utf-8") as f:
@@ -299,7 +384,7 @@ def run(cfg:PipelineConfig):
 
     # Optional: release VRAM after WhisperX so TTS can run faster/more stable.
     if str(device).startswith("cuda"):
-        rel = os.getenv("DUBPIPELINE_WHISPERX_RELEASE_VRAM", "1").strip().lower()
+        rel = str(cfg.whisperx.release_vram).strip().lower()
         if rel not in {"0", "false", "no", "off"}:
             try:
                 import gc

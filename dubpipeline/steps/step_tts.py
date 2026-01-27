@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from time import perf_counter
 from pathlib import Path
@@ -14,27 +13,16 @@ from TTS.api import TTS
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.concat_wavs import concat_wavs
+from dubpipeline.consts import Const
 from dubpipeline.utils.logging import info, step, warn, error
 
 # ============================
-# Coqui TTS / XTTS settings
+# Coqui TTS / XTTS settings are now in pipeline.yaml (tts.*)
 # ============================
-MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
-
-# Предупреждение XTTS для ru обычно появляется после ~182 символов.
-# Держим запас, чтобы не ловить truncated audio.
-RU_TEXT_WARN_LIMIT = 182
-MAX_RU_CHARS_ENV = int(os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS", "170"))
-# Если пользователь выставил слишком большое значение — аккуратно зажимаем.
-# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MAX_RU_CHARS = min(MAX_RU_CHARS_ENV, RU_TEXT_WARN_LIMIT - 2) !!!!!!!!!!!!!!!!!!!!
-MAX_RU_CHARS = MAX_RU_CHARS_ENV
-
 
 # Пауза тишиной между чанками при склейке (мс).
-GAP_MS = 80
 
 # Разделители, по которым стараемся резать "красиво".
-BREAKS = [". ", "! ", "? ", "; ", ": ", " — ", ", "]
 
 
 # ============================
@@ -78,16 +66,18 @@ def _norm_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-def split_ru_text(text: str, max_len: int = MAX_RU_CHARS) -> list[str]:
+def split_ru_text(text: str, max_len: int, breaks: Sequence[str] | None = None) -> list[str]:
     """Режем текст на куски до max_len: пунктуация -> пробел -> жёстко."""
     text = _norm_text(text)
+    if breaks is None:
+        breaks = [". ", "! ", "? ", "; ", ": ", " — ", ", "]
     if len(text) <= max_len:
         return [text]
 
     parts: list[str] = []
     while len(text) > max_len:
         cut = -1
-        for b in BREAKS:
+        for b in breaks:
             i = text.rfind(b, 0, max_len + 1)
             if i > cut:
                 cut = i + len(b) - 1
@@ -254,12 +244,34 @@ def _cleanup_files(paths: Iterable[Path]) -> None:
 # ============================
 
 def get_voices(cfg: Optional[PipelineConfig] = None) -> Sequence[str] | None:
-    """Список доступных speakers (если модель отдаёт)."""
+    """Список доступных speakers (если модель отдаёт).
+
+    В GUI список голосов может запрашиваться ДО запуска пайплайна,
+    поэтому здесь нельзя требовать Const.bind(cfg).
+
+    Логика:
+      - если cfg передан: используем его (и корректно выбираем device)
+      - если cfg не передан: пробуем загрузить дефолтный pipeline.yaml, чтобы учесть ENV overrides
+      - если и это не получилось: используем безопасный дефолт модели
+    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_name = None
+
     if cfg is not None:
         device = _select_device(cfg)
+        model_name = getattr(getattr(cfg, "tts", None), "model_name", None)
 
-    tts = _load_tts(MODEL_NAME, device)
+    if not model_name:
+        try:
+            # Берём дефолтный template yaml (dubpipeline/video.pipeline.yaml) + ENV overrides
+            from dubpipeline.config import load_pipeline_config_ex, pipeline_path as _pipeline_path
+            _cfg = load_pipeline_config_ex(_pipeline_path)
+            model_name = _cfg.tts.model_name
+            device = _select_device(_cfg)
+        except Exception:
+            model_name = "tts_models/multilingual/multi-dataset/xtts_v2"
+
+    tts = _load_tts(str(model_name), device)
     return getattr(tts, "speakers", None)
 
 
@@ -272,6 +284,7 @@ getVoices = get_voices_compat  # noqa: N802
 
 
 def run(cfg: PipelineConfig) -> None:
+    Const.bind(cfg)
     """Генерация русской озвучки по segments_ru_json -> seg_XXXX.wav."""
 
     device = _select_device(cfg)
@@ -295,7 +308,7 @@ def run(cfg: PipelineConfig) -> None:
     info(f"TTS language: {language}\n")
     info(f"Rebuild: {rebuild}\n")
 
-    tts = _load_tts(MODEL_NAME, device)
+    tts = _load_tts(Const.tts_model_name(), device)
 
     speakers = getattr(tts, "speakers", None)
     languages = getattr(tts, "languages", None)
@@ -306,14 +319,14 @@ def run(cfg: PipelineConfig) -> None:
     info(f"Using speaker: {default_speaker!r}\n")
     speaker_wav = _resolve_speaker_wav(cfg)
     latents = None
-    use_fast_latents = os.getenv("DUBPIPELINE_TTS_FAST_LATENTS", "1").strip().lower() not in {"0","false","no","off"}
+    use_fast_latents = Const.tts_fast_latents()
     if speaker_wav:
         info(f"Using speaker_wav: {speaker_wav}\n")
         if use_fast_latents:
             latents = _get_speaker_latents_cached(tts, speaker_wav=speaker_wav, device=device)
             info("[TTS] speaker latents caching: " + ("ON" if latents is not None else "OFF") + "\n")
         else:
-            info("[TTS] speaker latents caching: DISABLED via env DUBPIPELINE_TTS_FAST_LATENTS\n")
+            info("[TTS] speaker latents caching: DISABLED via config tts.fast_latents\n")
     else:
         info("[TTS] speaker_wav not set; speaker latents caching not applicable\n")
 
@@ -362,15 +375,13 @@ def run(cfg: PipelineConfig) -> None:
             seg_synth_sec = 0.0
             seg_concat_sec = 0.0
             try:
-                chunks = split_ru_text(text_ru, max_len=MAX_RU_CHARS)
+                chunks = split_ru_text(text_ru, max_len=Const.tts_max_ru_chars(), breaks=Const.tts_breaks())
 
                 # Попытка ускорения: если наш чанкер разбил текст на несколько кусочков,
                 # пробуем один вызов tts_to_file на весь сегмент (до лимита по символам).
                 # Если модель/библиотека не переваривает длину — откатываемся на чанкинг.
-                direct_on = os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL", "1").strip().lower() not in {"0", "false", "no", "off"}
-                direct_max_chars = int(os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS", "1200"))
-                if language == "ru":
-                    direct_max_chars = min(direct_max_chars, RU_TEXT_WARN_LIMIT - 2)
+                direct_on = Const.tts_try_single_call()
+                direct_max_chars = Const.tts_try_single_call_max_chars()
                 used_direct = False
                 if direct_on and len(chunks) > 1 and len(text_ru) <= direct_max_chars:
                     t_direct0 = perf_counter()
@@ -469,7 +480,7 @@ def run(cfg: PipelineConfig) -> None:
                     tts_synth_total += dt
 
                     t_cat0 = perf_counter()
-                    concat_wavs(parts, out_wav, gap_ms=GAP_MS, subtype="PCM_16")
+                    concat_wavs(parts, out_wav, gap_ms=Const.tts_gap_ms(), subtype="PCM_16")
                     t_cat1 = perf_counter()
                     dtc = (t_cat1 - t_cat0)
                     seg_concat_sec += dtc
@@ -512,7 +523,7 @@ def run(cfg: PipelineConfig) -> None:
     metrics_path = out_dir / "tts_metrics.json"
     try:
         payload = {
-            "model": MODEL_NAME,
+            "model": Const.tts_model_name(),
             "device": device,
             "language": language,
             "speaker": default_speaker if not speaker_wav else None,

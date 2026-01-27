@@ -5,6 +5,7 @@ from pathlib import Path
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
+from dubpipeline.consts import Const
 
 
 def run_ffmpeg(cmd: list[str]) -> None:
@@ -23,7 +24,17 @@ def run_ffmpeg(cmd: list[str]) -> None:
         info("[OK] ffmpeg finished successfully")
 
 
-def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg") -> None:
+def mux_replace(
+    video: Path,
+    audio: Path,
+    out_path: Path,
+    *,
+    ffmpeg: str = "ffmpeg",
+    audio_codec: str = "aac",
+    audio_bitrate: str = "192k",
+    ru_lang: str = "rus",
+    ru_title: str = "Russian_Dub",
+) -> None:
     """
     Заменить оригинальную аудиодорожку на русскую.
     Выход обычно MP4.
@@ -38,10 +49,11 @@ def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg"
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "copy",
-        "-c:a", "aac",
+        "-c:a", audio_codec,
+        "-b:a", audio_bitrate,
         "-shortest",
-        "-metadata:s:a:0", "language=rus",
-        "-metadata:s:a:0", "title=Russian_Dub",
+        "-metadata:s:a:0", f"language={ru_lang}",
+        "-metadata:s:a:0", f"title={ru_title}",
         norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
@@ -51,8 +63,14 @@ def mux_add(
     video: Path,
     audio: Path,
     out_path: Path,
+    *,
     ffmpeg: str = "ffmpeg",
+    audio_codec: str = "aac",
+    audio_bitrate: str = "192k",
     orig_lang: str = "eng",
+    orig_title: str = "Original",
+    ru_lang: str = "rus",
+    ru_title: str = "Russian_Dub",
 ) -> None:
     """
     Добавить русскую дорожку, оставив оригинальную.
@@ -69,13 +87,14 @@ def mux_add(
         "-map", "0:a:0",
         "-map", "1:a:0",
         "-c:v", "copy",
-        "-c:a", "aac",
+        "-c:a", audio_codec,
+        "-b:a", audio_bitrate,
         "-shortest",
         # метаданные для дорожек
         "-metadata:s:a:0", f"language={orig_lang}",
-        "-metadata:s:a:0", "title=Original",
-        "-metadata:s:a:1", "language=rus",
-        "-metadata:s:a:1", "title=Russian_Dub",
+        "-metadata:s:a:0", f"title={orig_title}",
+        "-metadata:s:a:1", f"language={ru_lang}",
+        "-metadata:s:a:1", f"title={ru_title}",
         norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
@@ -125,6 +144,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(cfg:PipelineConfig) -> None:
+    Const.bind(cfg)
     video = cfg.paths.input_video
     audio = cfg.paths.audio_wav
     out_path = cfg.paths.final_video
@@ -150,8 +170,28 @@ def run(cfg:PipelineConfig) -> None:
     print(f"Mode: {cfg.mode}\n")
 
     if cfg.mode == "Замена":
-        mux_replace(video, audio, out_path)
+        mux_replace(
+            video,
+            audio,
+            out_path,
+            ffmpeg=cfg.mux.ffmpeg_bin,
+            audio_codec=cfg.mux.audio_codec,
+            audio_bitrate=cfg.mux.audio_bitrate,
+            ru_lang=cfg.mux.ru_lang,
+            ru_title=cfg.mux.ru_track_title,
+        )
     else:
-        mux_add(video, audio, out_path)
+        mux_add(
+            video,
+            audio,
+            out_path,
+            ffmpeg=cfg.mux.ffmpeg_bin,
+            audio_codec=cfg.mux.audio_codec,
+            audio_bitrate=cfg.mux.audio_bitrate,
+            orig_lang=(cfg.mux.orig_lang or cfg.languages.src or "eng"),
+            orig_title=cfg.mux.orig_track_title,
+            ru_lang=cfg.mux.ru_lang,
+            ru_title=cfg.mux.ru_track_title,
+        )
 
 
