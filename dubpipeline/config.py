@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+import torch
 import yaml
 
 from dubpipeline.utils.logging import info, warn
@@ -198,6 +199,19 @@ class PipelineConfig:
     translate: TranslateConfig = field(default_factory=TranslateConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
+
+
+    @property
+    def device(self) -> str:
+        """return device name."""
+        return "cuda" if torch.cuda.is_available() and self.usegpu else "cpu"
+
+    @property
+    def compute_type(self) -> str:
+        """return compute_type."""
+
+        compute_type = "float16" if self.device == "cuda" else "int8"
+        return compute_type
 
 
 # -------------------------
