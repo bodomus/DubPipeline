@@ -18,6 +18,23 @@ from dubpipeline.utils.logging import  info
 
 import os
 
+STEP_LABELS = {
+    "extract_audio": "Извлечение аудио",
+    "asr_whisperx": "ASR (WhisperX)",
+    "translate": "Перевод",
+    "tts": "TTS",
+    "align": "Синхронизация",
+    "merge": "Сборка видео",
+}
+
+DEFAULT_STEPS = {
+    "extract_audio": True,
+    "asr_whisperx": True,
+    "translate": True,
+    "tts": True,
+    "align": True,
+    "merge": True,
+}
 
 def show_app_constants():
     print(f'### DUBPIPELINE_TTS_MAX_RU_CHARS: {os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS")}')
@@ -150,12 +167,59 @@ def run_pipeline_sequence(run_items, window):
         window.write_event_value("-DONE-", 1)
 
 
+def normalize_steps(steps_dict: dict | None) -> dict:
+    normalized = dict(DEFAULT_STEPS)
+    if isinstance(steps_dict, dict):
+        for key in normalized:
+            if key in steps_dict:
+                normalized[key] = bool(steps_dict[key])
+    return normalized
+
+
+def steps_summary(steps_dict: dict) -> str:
+    enabled = [label for key, label in STEP_LABELS.items() if steps_dict.get(key)]
+    if not enabled:
+        return "Шаги: ничего не выбрано"
+    return f"Шаги: {', '.join(enabled)}"
+
+
+def show_steps_modal(parent, current_steps: dict) -> dict:
+    steps = normalize_steps(current_steps)
+    layout = [[sg.Text("Выберите шаги генерации:")]]
+    for key in STEP_LABELS:
+        layout.append([sg.Checkbox(STEP_LABELS[key], key=f"-STEP-{key}-", default=steps[key])])
+    layout.append([sg.Button("Сохранить", key="-SAVE-"), sg.Button("Отмена", key="-CANCEL-")])
+
+    window = sg.Window(
+        "Шаги генерации",
+        layout,
+        modal=True,
+        finalize=True,
+        keep_on_top=True,
+        location=parent.current_location() if parent else None,
+    )
+
+    result = steps
+    while True:
+        event, values = window.read()
+        if event in (sg.WIN_CLOSED, "-CANCEL-"):
+            result = steps
+            break
+        if event == "-SAVE-":
+            result = {key: bool(values.get(f"-STEP-{key}-")) for key in STEP_LABELS}
+            break
+
+    window.close()
+    return result
+
+
 def main():
     show_app_constants()
     sg.theme("SystemDefault")
     mpeg_modes = ("Замена", "Добавление")
     voices = getVoices()
     current_voice = get_voice()
+    current_steps = normalize_steps(BASE_CFG.get("steps"))
 
     video_exts = {".mp4", ".mkv", ".mov", ".avi"}
 
@@ -193,6 +257,8 @@ def main():
         [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
         [sg.Checkbox("Перегенерировать все шаги (игнорировать кэш)", key="-REBUILD-")],
         [sg.Checkbox("Убирать мусор (удалять временные файлы после успеха)", key="-CLEANUP-")],
+        [sg.Button("Шаги генерации...", key="-STEPS-"),
+         sg.Text(steps_summary(current_steps), key="-STEPS_SUMMARY-", expand_x=True)],
         [sg.Text("Режим добавления аудио:"),
          sg.Combo(
              values=mpeg_modes,
@@ -331,6 +397,7 @@ def main():
                     v["-IN-"] = str(p)
                     v["-PROJECT-"] = project_name
                     v["-OUT-"] = out_dir
+                    v["-STEPS-"] = dict(current_steps)
 
                     pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
                     pipeline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -364,6 +431,7 @@ def main():
             values["-PROJECT-"] = project_name
             out_dir = str(Path(base_out) / project_name)
             values["-OUT-"] = out_dir
+            values["-STEPS-"] = dict(current_steps)
 
             pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
             pipeline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -407,6 +475,10 @@ def main():
                 window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
             else:
                 window["-STATUS-"].update(f"Статус: {status}")
+
+        if event == "-STEPS-":
+            current_steps = show_steps_modal(window, current_steps)
+            window["-STEPS_SUMMARY-"].update(steps_summary(current_steps))
 
     window.close()
 
