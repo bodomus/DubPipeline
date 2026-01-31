@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+import torch
 import yaml
 
 from dubpipeline.utils.logging import info, warn
@@ -198,6 +199,19 @@ class PipelineConfig:
     translate: TranslateConfig = field(default_factory=TranslateConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
+
+
+    @property
+    def device(self) -> str:
+        """return device name."""
+        return "cuda" if torch.cuda.is_available() and self.usegpu else "cpu"
+
+    @property
+    def compute_type(self) -> str:
+        """return compute_type."""
+
+        compute_type = "float16" if self.device == "cuda" else "int8"
+        return compute_type
 
 
 # -------------------------
@@ -574,6 +588,11 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["rebuild"] = bool(values.get("-REBUILD-", False))
     cfg["delete_srt"] = bool(values.get("-SRT-", False))
     cfg["cleanup"] = bool(values.get("-CLEANUP-", False))
+    steps_values = values.get("-STEPS-")
+    if isinstance(steps_values, dict):
+        cfg.setdefault("steps", {})
+        for key, value in steps_values.items():
+            cfg["steps"][key] = bool(value)
 
     cfg.setdefault("paths", {})
     cfg["paths"]["out_dir"] = out_dir

@@ -5,6 +5,8 @@ import shutil
 from typing import Callable
 import logging
 
+import torch
+
 from dubpipeline.steps import step_whisperx, step_tts, step_align, step_merge_py, step_translate
 from .steps import step_extract_audio
 from .config import load_pipeline_config_ex
@@ -96,6 +98,16 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
 def run_pipeline(cfg, pipeline_path: Path) -> None:
     # Гарантия инициализации статического репозитория конфига (на случай вызова run_pipeline не из CLI main)
     Const.bind(cfg)
+    device = cfg.device  # уже вычисляется property
+    compute_type = cfg.compute_type
+
+    log_run_header(
+        info, cfg,
+        device=device,
+        compute_type=compute_type,
+        asr_model=cfg.whisperx.model_name,
+        batch_size=cfg.whisperx.batch_size,
+    )
 
     success = False
 
