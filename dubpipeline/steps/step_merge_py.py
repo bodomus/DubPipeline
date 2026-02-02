@@ -83,6 +83,7 @@ def mux_add(
     ]
     run_ffmpeg(cmd)
 
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Слияние видео и русской озвучки (full WAV) с помощью ffmpeg"
@@ -107,9 +108,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--mode",
-        choices=["replace", "add"],
+        choices=["replace", "add", "rus_first"],
         default="replace",
-        help="Режим: replace=заменить оригинальную аудиодорожку, add=добавить русскую как вторую",
+        help=(
+            "Режим: replace=заменить оригинальную аудиодорожку, "
+            "add=добавить русскую как вторую, "
+            "rus_first=добавить русскую и сделать первой"
+        ),
     )
     p.add_argument(
         "--ffmpeg",
@@ -124,6 +129,17 @@ def parse_args() -> argparse.Namespace:
         help="Код языка оригинальной аудиодорожки (для метаданных, только для mode=add)",
     )
     return p.parse_args()
+
+
+def resolve_mux_mode(mode: str) -> MuxMode:
+    mode = (mode or "").strip()
+    if mode in ("Замена", "replace"):
+        return MuxMode.REPLACE
+    if mode in ("Добавление", "add"):
+        return MuxMode.ADD
+    if mode in ("Изменить порядок", "Русская дорожка первой", "rus_first"):
+        return MuxMode.RUS_FIRST
+    raise ValueError(f"Unknown mux mode: {mode}")
 
 
 def run(cfg:PipelineConfig) -> None:
@@ -152,34 +168,6 @@ def run(cfg:PipelineConfig) -> None:
     print(f"Output: {out_path}\n")
     print(f"Mode: {cfg.mode}\n")
 
-    if cfg.mode == "Замена":
-        mux_smart(video, audio, out_path, mode=MuxMode.REPLACE)
-        # mux_replace(
-        #     video,
-        #     audio,
-        #     out_path,
-        #     ffmpeg=cfg.mux.ffmpeg_bin,
-        #     audio_codec=cfg.mux.audio_codec,
-        #     audio_bitrate=cfg.mux.audio_bitrate,
-        #     ru_lang=cfg.mux.ru_lang,
-        #     ru_title=cfg.mux.ru_track_title,
-        # )
-    elif cfg.mode == "Добавление":
-        mux_smart(video, audio, out_path, mode=MuxMode.ADD)
-        # mux_add(
-        #     video,
-        #     audio,
-        #     out_path,
-        #     ffmpeg=cfg.mux.ffmpeg_bin,
-        #     audio_codec=cfg.mux.audio_codec,
-        #     audio_bitrate=cfg.mux.audio_bitrate,
-        #     orig_lang=(cfg.mux.orig_lang or cfg.languages.src or "eng"),
-        #     orig_title=cfg.mux.orig_track_title,
-        #     ru_lang=cfg.mux.ru_lang,
-        #     ru_title=cfg.mux.ru_track_title,
-        # )
-    elif cfg.mode == "Изменить порядок":
-        mux_smart(video, audio, out_path, mode=MuxMode.RUS_FIRST)
-
-
+    mux_mode = resolve_mux_mode(cfg.mode)
+    mux_smart(video, audio, out_path, mode=mux_mode)
 
