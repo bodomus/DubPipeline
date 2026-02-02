@@ -3,26 +3,10 @@ import subprocess
 from pathlib import Path
 
 from dubpipeline.config import PipelineConfig
+from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
-
-
-def run_ffmpeg(cmd: list[str]) -> None:
-    info(f"[FFMPEG] {' '.join(cmd)}")
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        error("ffmpeg failed")
-        error(result.stderr)
-        raise SystemExit(result.returncode)
-    else:
-        info("[OK] ffmpeg finished successfully")
-
 
 def mux_replace(
     video: Path,
@@ -99,7 +83,6 @@ def mux_add(
     ]
     run_ffmpeg(cmd)
 
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Слияние видео и русской озвучки (full WAV) с помощью ffmpeg"
@@ -170,28 +153,33 @@ def run(cfg:PipelineConfig) -> None:
     print(f"Mode: {cfg.mode}\n")
 
     if cfg.mode == "Замена":
-        mux_replace(
-            video,
-            audio,
-            out_path,
-            ffmpeg=cfg.mux.ffmpeg_bin,
-            audio_codec=cfg.mux.audio_codec,
-            audio_bitrate=cfg.mux.audio_bitrate,
-            ru_lang=cfg.mux.ru_lang,
-            ru_title=cfg.mux.ru_track_title,
-        )
-    else:
-        mux_add(
-            video,
-            audio,
-            out_path,
-            ffmpeg=cfg.mux.ffmpeg_bin,
-            audio_codec=cfg.mux.audio_codec,
-            audio_bitrate=cfg.mux.audio_bitrate,
-            orig_lang=(cfg.mux.orig_lang or cfg.languages.src or "eng"),
-            orig_title=cfg.mux.orig_track_title,
-            ru_lang=cfg.mux.ru_lang,
-            ru_title=cfg.mux.ru_track_title,
-        )
+        mux_smart(video, audio, out_path, mode=MuxMode.REPLACE)
+        # mux_replace(
+        #     video,
+        #     audio,
+        #     out_path,
+        #     ffmpeg=cfg.mux.ffmpeg_bin,
+        #     audio_codec=cfg.mux.audio_codec,
+        #     audio_bitrate=cfg.mux.audio_bitrate,
+        #     ru_lang=cfg.mux.ru_lang,
+        #     ru_title=cfg.mux.ru_track_title,
+        # )
+    elif cfg.mode == "Добавление":
+        mux_smart(video, audio, out_path, mode=MuxMode.ADD)
+        # mux_add(
+        #     video,
+        #     audio,
+        #     out_path,
+        #     ffmpeg=cfg.mux.ffmpeg_bin,
+        #     audio_codec=cfg.mux.audio_codec,
+        #     audio_bitrate=cfg.mux.audio_bitrate,
+        #     orig_lang=(cfg.mux.orig_lang or cfg.languages.src or "eng"),
+        #     orig_title=cfg.mux.orig_track_title,
+        #     ru_lang=cfg.mux.ru_lang,
+        #     ru_title=cfg.mux.ru_track_title,
+        # )
+    elif cfg.mode == "Изменить порядок":
+        mux_smart(video, audio, out_path, mode=MuxMode.RUS_FIRST)
+
 
 
