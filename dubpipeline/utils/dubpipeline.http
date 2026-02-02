@@ -1,0 +1,13 @@
+### GET request to example server
+### Add comment to DUB-28
+POST {{baseUrl}}/api/issues/DUB-27/comments?fields=idReadable,description
+Accept: application/json
+Content-Type: application/json
+Authorization: Bearer {{youtrackToken}}
+
+{
+  "text": "Тестовый ТЕКСТ КОММЕНТАРИЯ"
+}
+
+
+###

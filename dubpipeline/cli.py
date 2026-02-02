@@ -8,6 +8,7 @@ import logging
 import torch
 
 from dubpipeline.steps import step_whisperx, step_tts, step_align, step_merge_py, step_translate
+from dubpipeline.utils.run_meta import log_run_header
 from .steps import step_extract_audio
 from .config import load_pipeline_config_ex
 from dubpipeline.utils.logging import info, init_logger
@@ -161,7 +162,7 @@ def rebuild_cleanup(cfg):
 
 def main() -> None:
 
-    print("DUB-20 https://bodomus.youtrack.cloud/issue/DUB-20")
+    #print("DUB-27 https://bodomus.youtrack.cloud/issue/DUB-27")
     parser = build_parser()
     args = parser.parse_args()
 
