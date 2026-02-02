@@ -93,6 +93,13 @@ python .\tools\mux_ru_audio.py ^
   --out out\lecture_sample.ru.with_both.mkv ^
   --mode add
 
+3) Добавить русскую дорожку и сделать её первой:
+(venv) λ python .\tools\mux_ru_audio.py ^
+  --video in\lecture_sample.mp4 ^
+  --audio out\lecture_sample.ru_full.wav ^
+  --out out\lecture_sample.ru.rus_first.mkv ^
+  --mode rus_first
+
 
 # Опции
 
