@@ -162,7 +162,7 @@ def rebuild_cleanup(cfg):
 
 def main() -> None:
 
-    #print("DUB-27 https://bodomus.youtrack.cloud/issue/DUB-27")
+    #print("DUB-24 https://bodomus.youtrack.cloud/issue/DUB-27")
     parser = build_parser()
     args = parser.parse_args()
 
