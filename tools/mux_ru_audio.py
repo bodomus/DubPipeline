@@ -1,80 +1,7 @@
 import argparse
-import subprocess
 from pathlib import Path
 
-
-def run_ffmpeg(cmd: list[str]) -> None:
-    print("[FFMPEG]", " ".join(cmd))
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if result.returncode != 0:
-        print("[ERROR] ffmpeg failed")
-        print(result.stderr)
-        raise SystemExit(result.returncode)
-    else:
-        print("[OK] ffmpeg finished successfully")
-
-
-def mux_replace(video: Path, audio: Path, out_path: Path, ffmpeg: str = "ffmpeg") -> None:
-    """
-    Заменить оригинальную аудиодорожку на русскую.
-    Выход обычно MP4.
-    """
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(video),
-        "-i",
-        str(audio),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        "-metadata:s:a:0", "language=rus",
-        "-metadata:s:a:0", "title=Russian Dub",
-        str(out_path),
-    ]
-    run_ffmpeg(cmd)
-
-
-def mux_add(
-    video: Path,
-    audio: Path,
-    out_path: Path,
-    ffmpeg: str = "ffmpeg",
-    orig_lang: str = "eng",
-) -> None:
-    """
-    Добавить русскую дорожку, оставив оригинальную.
-    Лучше использовать контейнер MKV (но можно и MP4, если не страшно).
-    """
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(video),
-        "-i",
-        str(audio),
-        "-map", "0:v:0",
-        "-map", "0:a:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        # метаданные для дорожек
-        "-metadata:s:a:0", f"language={orig_lang}",
-        "-metadata:s:a:0", "title=Original",
-        "-metadata:s:a:1", "language=rus",
-        "-metadata:s:a:1", "title=Russian Dub",
-        str(out_path),
-    ]
-    run_ffmpeg(cmd)
+from dubpipeline.utils.audio_process import MuxMode, mux_smart
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,9 +28,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--mode",
-        choices=["replace", "add"],
+        choices=["replace", "add", "rus_first"],
         default="replace",
-        help="Режим: replace=заменить оригинальную аудиодорожку, add=добавить русскую как вторую",
+        help=(
+            "Режим: replace=заменить оригинальную аудиодорожку, "
+            "add=добавить русскую как вторую, "
+            "rus_first=добавить русскую и сделать первой"
+        ),
     )
     p.add_argument(
         "--ffmpeg",
@@ -118,6 +49,17 @@ def parse_args() -> argparse.Namespace:
         help="Код языка оригинальной аудиодорожки (для метаданных, только для mode=add)",
     )
     return p.parse_args()
+
+
+def resolve_mux_mode(mode: str) -> MuxMode:
+    mode = (mode or "").strip().lower()
+    if mode == "replace":
+        return MuxMode.REPLACE
+    if mode == "add":
+        return MuxMode.ADD
+    if mode == "rus_first":
+        return MuxMode.RUS_FIRST
+    raise ValueError(f"Unknown mux mode: {mode}")
 
 
 def main() -> None:
@@ -139,10 +81,15 @@ def main() -> None:
     print(f"[INFO] Output: {out_path}")
     print(f"[INFO] Mode: {args.mode}")
 
-    if args.mode == "replace":
-        mux_replace(video, audio, out_path, ffmpeg=args.ffmpeg)
-    else:
-        mux_add(video, audio, out_path, ffmpeg=args.ffmpeg, orig_lang=args.orig_lang)
+    mux_mode = resolve_mux_mode(args.mode)
+    mux_smart(
+        video,
+        audio,
+        out_path,
+        mode=mux_mode,
+        ffmpeg=args.ffmpeg,
+        orig_lang=args.orig_lang,
+    )
 
 
 if __name__ == "__main__":

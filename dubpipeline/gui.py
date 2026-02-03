@@ -216,7 +216,7 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
 def main():
     show_app_constants()
     sg.theme("SystemDefault")
-    mpeg_modes = ("Замена", "Добавление", "Изменить порядок")
+    mpeg_modes = ("Замена", "Добавление", "Русская дорожка первой")
     voices = getVoices()
     current_voice = get_voice()
     current_steps = normalize_steps(BASE_CFG.get("steps"))
