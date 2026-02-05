@@ -24,6 +24,8 @@ steps:
   translate: true
   tts: true
   merge: true
+output:
+  move_to_dir: ""
 tts:
   voice: Luis Moray
   sample_rate: 22050
