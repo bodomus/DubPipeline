@@ -180,6 +180,11 @@ class MuxConfig:
 
 
 @dataclass
+class OutputConfig:
+    move_to_dir: str = ""
+
+
+@dataclass
 class PipelineConfig:
     # general
     project_name: str
@@ -199,6 +204,7 @@ class PipelineConfig:
     translate: TranslateConfig = field(default_factory=TranslateConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
 
 
     @property
@@ -238,6 +244,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "translate": asdict(TranslateConfig()),
     "tts": asdict(TtsConfig()),
     "mux": asdict(MuxConfig()),
+    "output": asdict(OutputConfig()),
 }
 
 
@@ -333,6 +340,8 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS": "translate.max_new_tokens",
         "DUBPIPELINE_CACHE_DB": "translate.cache_db",
         "DUBPIPELINE_TRANSLATE_RELEASE_VRAM": "translate.release_vram",
+        # Output
+        "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
     }
 
     overrides: Dict[str, Any] = {}
@@ -531,6 +540,7 @@ def load_pipeline_config_ex(
     translate = TranslateConfig(**(merged.get("translate") or {}))
     tts = TtsConfig(**(merged.get("tts") or {}))
     mux = MuxConfig(**(merged.get("mux") or {}))
+    output = OutputConfig(**(merged.get("output") or {}))
 
     # inherit language defaults into mux if user didn't override
     if not mux.orig_lang:
@@ -557,6 +567,7 @@ def load_pipeline_config_ex(
         translate=translate,
         tts=tts,
         mux=mux,
+        output=output,
     )
 
     info("[dubpipeline] Config loaded (defaults -> yaml -> env -> cli).\n")
@@ -601,6 +612,9 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     # voice
     cfg.setdefault("tts", {})
     cfg["tts"]["voice"] = values.get("-VOICE-", cfg["tts"].get("voice", ""))
+
+    cfg.setdefault("output", {})
+    cfg["output"]["move_to_dir"] = values.get("-MOVE_TO_DIR-", cfg["output"].get("move_to_dir", ""))
 
     pipeline_path = pipeline_path.resolve()
     pipeline_path.parent.mkdir(parents=True, exist_ok=True)

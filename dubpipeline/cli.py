@@ -14,6 +14,7 @@ from .config import load_pipeline_config_ex
 from dubpipeline.utils.logging import info, init_logger
 from dubpipeline.utils.timing import timed_run, timed_block
 from dubpipeline.consts import Const
+from dubpipeline.utils.output_move import OutputMover
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,6 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="KEY=VALUE",
         help="Точечный override на этот запуск. Пример: --set tts.max_ru_chars=260",
+    )
+    parser.add_argument(
+        "--move-to-dir",
+        default=None,
+        help="Переместить выходные файлы в указанную директорию (переопределяет YAML/ENV).",
     )
     return parser
 
@@ -144,6 +150,9 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("99_delete_srt", log=info):
             Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
 
+    mover = OutputMover(cfg.output.move_to_dir, base_dir=cfg.paths.workdir)
+    mover.move_outputs([Path(cfg.paths.final_video)])
+
     success = True
 
     if success and getattr(cfg, "cleanup", False):
@@ -166,8 +175,12 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    cli_set = list(args.set)
+    if args.move_to_dir is not None:
+        cli_set.append(f"output.move_to_dir={args.move_to_dir}")
+
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
-    cfg = load_pipeline_config_ex(pipeline_path, cli_set=args.set)
+    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set)
     Const.bind(cfg)
 
     log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
