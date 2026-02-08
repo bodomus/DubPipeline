@@ -213,6 +213,13 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
     return result
 
 
+def persist_move_to_dir(path: str) -> None:
+    BASE_CFG.setdefault("output", {})
+    BASE_CFG["output"]["move_to_dir"] = path
+    with TEMPLATE_PATH.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
+
+
 def main():
     show_app_constants()
     sg.theme("SystemDefault")
@@ -252,6 +259,10 @@ def main():
         [sg.Text("Выходная папка:"),
          sg.Input(key="-OUT-", expand_x=True),
          sg.FolderBrowse("...")],
+
+        [sg.Text("Переместить в папку:"),
+         sg.Input(key="-MOVE_TO_DIR-", expand_x=True, enable_events=True),
+         sg.FolderBrowse("...", key="-BROWSE_MOVE_DIR-", target="-MOVE_TO_DIR-")],
 
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
         [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
@@ -301,6 +312,7 @@ def main():
     window["-PROJECT-"].update("2")
     window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
     window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/output")
+    window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
     running = False
@@ -357,6 +369,9 @@ def main():
         if event == "-VOICE-":
             current_voice = values["-VOICE-"]
             _emit_info(window, f"Выбран голос: {current_voice}")
+
+        if event == "-MOVE_TO_DIR-":
+            persist_move_to_dir(values.get("-MOVE_TO_DIR-", "").strip())
 
         if event == "-START-":
             if running:
