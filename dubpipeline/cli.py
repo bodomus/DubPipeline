@@ -1,20 +1,25 @@
 from __future__ import annotations
+
 import argparse
-from pathlib import Path
-import shutil
-from typing import Callable
 import logging
+import shutil
+from pathlib import Path
+from typing import Callable
 
-import torch
-
-from dubpipeline.steps import step_whisperx, step_tts, step_align, step_merge_py, step_translate
-from dubpipeline.utils.run_meta import log_run_header
-from .steps import step_extract_audio
-from .config import load_pipeline_config_ex
-from dubpipeline.utils.logging import info, init_logger
-from dubpipeline.utils.timing import timed_run, timed_block
 from dubpipeline.consts import Const
+from dubpipeline.steps import (
+    step_whisperx,
+    step_tts,
+    step_align,
+    step_merge_py,
+    step_translate,
+)
+from dubpipeline.utils.logging import info, init_logger
 from dubpipeline.utils.output_move import OutputMover
+from dubpipeline.utils.run_meta import log_run_header
+from dubpipeline.utils.timing import timed_run, timed_block
+from .config import load_pipeline_config_ex
+from .steps import step_extract_audio
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,6 +104,7 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
     # сегменты целиком
     shutil.rmtree(out_dir / "segments", ignore_errors=True)
 
+
 # важно: info должна быть уже доступна в момент объявления функции
 # (декоратор выполняется при импорте модуля)
 @timed_run(log=info, run_name="RUN", top_n=50)
@@ -109,7 +115,8 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
     compute_type = cfg.compute_type
 
     log_run_header(
-        info, cfg,
+        info,
+        cfg,
         device=device,
         compute_type=compute_type,
         asr_model=cfg.whisperx.model_name,
@@ -132,9 +139,9 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
     steps: list[tuple[str, bool, Callable]] = [
         ("01_extract_audio", cfg.steps.extract_audio, step_extract_audio.run),
         ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
-        ("03_translate",     cfg.steps.translate,     step_translate.run),
-        ("04_tts+align",     cfg.steps.tts,           tts_and_align),
-        ("05_merge",         cfg.steps.merge,         step_merge_py.run),
+        ("03_translate", cfg.steps.translate, step_translate.run),
+        ("04_tts+align", cfg.steps.tts, tts_and_align),
+        ("05_merge", cfg.steps.merge, step_merge_py.run),
     ]
 
     for name, enabled, fn in steps:
@@ -171,7 +178,7 @@ def rebuild_cleanup(cfg):
 
 def main() -> None:
 
-    #print("DUB-24 https://bodomus.youtrack.cloud/issue/DUB-27")
+    print("DUB-21 https://bodomus.youtrack.cloud/issue/DUB-21")
     parser = build_parser()
     args = parser.parse_args()
 
