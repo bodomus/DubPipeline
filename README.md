@@ -129,8 +129,11 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 
 ## CLI ключи (`python -m dubpipeline.cli run <pipeline.yaml> ...`)
 
-- `--recursive` — рекурсивный обход входной директории (если `paths.input_video` указывает на папку).
-- `--glob "*.mp4"` — glob-фильтр входных файлов.
+- `--in-file <path>` — входной видеофайл (существующий файл), переопределяет `paths.input_video`.
+- `--in-dir <path>` — входная директория (существующая папка), переопределяет `paths.input_video`.
+- `--in-file` и `--in-dir` взаимно исключающие: нельзя указывать вместе.
+- `--recursive` — рекурсивный обход входной директории (если вход — файл, ключ игнорируется с предупреждением).
+- `--glob "*.mp4"` — glob-фильтр входных файлов для директории (если вход — файл, ключ игнорируется с предупреждением).
 - `--out <dir>` — переопределяет `paths.out_dir` (рабочая/temp директория).
 - `--lang-src <code>` — переопределяет `languages.src`.
 - `--lang-dst <code>` — переопределяет `languages.tgt`.
@@ -141,6 +144,8 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 - `--rebuild` — принудительно пересоздать артефакты шагов.
 - `--delete-temp` / `--keep-temp` — политика очистки temp/work файлов (взаимоисключающие).
 - `--plan` — dry-run режим: печатает effective config + входные файлы + шаги и завершает работу без запуска шагов и без записи файлов.
+
+При запуске `--plan`/`run` в summary выводится источник входа (`CLI` или `YAML/ENV/default`) и итоговый `input_video`.
 
 Допустимые canonical id шагов для `--steps`:
 - `extract_audio` → `01_extract_audio`
