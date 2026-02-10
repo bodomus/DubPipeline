@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
-from dubpipeline.utils.logging import info, init_logger
+from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
 from dubpipeline.utils.timing import timed_run, timed_block
@@ -45,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
         "pipeline_file",
         help="Путь к файлу *.pipeline.yaml",
     )
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument("--in-file", default=None, metavar="PATH", help="Входной видеофайл.")
+    input_group.add_argument("--in-dir", default=None, metavar="PATH", help="Входная директория с видеофайлами.")
     parser.add_argument(
         "--set",
         action="append",
@@ -135,6 +138,21 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     if args.keep_temp:
         cli_set.append("cleanup=false")
 
+    in_file = getattr(args, "in_file", None)
+    in_dir = getattr(args, "in_dir", None)
+
+    if in_file is not None:
+        in_file_path = Path(in_file).expanduser()
+        if not in_file_path.is_file():
+            parser.error(f"--in-file должен указывать на существующий файл: '{in_file_path}'")
+        cli_set.append(f"paths.input_video={in_file_path.resolve()}")
+
+    if in_dir is not None:
+        in_dir_path = Path(in_dir).expanduser()
+        if not in_dir_path.is_dir():
+            parser.error(f"--in-dir должен указывать на существующую директорию: '{in_dir_path}'")
+        cli_set.append(f"paths.input_video={in_dir_path.resolve()}")
+
     if args.steps is not None:
         parsed_steps = _parse_steps_arg(args.steps, parser)
         patch_mode = all(tok.strip().startswith(("+", "-")) for tok in args.steps.split(",") if tok.strip())
@@ -191,6 +209,38 @@ def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mod
     print(f"  input_files_count: {len(files)}")
     for path in files:
         print(f"    * {path}")
+
+
+def _resolve_input_options(
+    cfg: PipelineConfig,
+    parser: argparse.ArgumentParser,
+    *,
+    recursive: bool,
+    glob_pattern: str | None,
+) -> tuple[bool, str | None]:
+    input_path = Path(cfg.paths.input_video)
+    recursive_enabled = recursive
+    effective_glob = glob_pattern
+
+    if input_path.is_file() and recursive:
+        warn("[dubpipeline] --recursive проигнорирован: вход указан как файл.")
+        recursive_enabled = False
+
+    if input_path.is_file() and glob_pattern:
+        warn("[dubpipeline] --glob проигнорирован: вход указан как файл.")
+        effective_glob = None
+
+    if input_path.is_dir() and glob_pattern is None:
+        effective_glob = "*"
+
+    if not input_path.exists():
+        parser.error(f"Входной путь не найден: '{input_path}'")
+
+    return recursive_enabled, effective_glob
+
+
+def _detect_input_source(args: argparse.Namespace) -> str:
+    return "CLI" if args.in_file or args.in_dir else "YAML/ENV/default"
 
 
 def _build_cfg_for_input(base_cfg: PipelineConfig, input_file: Path) -> PipelineConfig:
@@ -318,7 +368,16 @@ def main() -> None:
     if not args.plan:
         Path(cfg.paths.out_dir).mkdir(parents=True, exist_ok=True)
 
-    files = _discover_input_files(cfg, recursive=args.recursive, glob_pattern=args.glob)
+    effective_recursive, effective_glob = _resolve_input_options(
+        cfg,
+        parser,
+        recursive=args.recursive,
+        glob_pattern=args.glob,
+    )
+    input_source = _detect_input_source(args)
+    print(f"[dubpipeline] input source: {input_source}")
+
+    files = _discover_input_files(cfg, recursive=effective_recursive, glob_pattern=effective_glob)
     _print_effective_summary(cfg, files, plan_mode=args.plan)
 
     if args.plan:
