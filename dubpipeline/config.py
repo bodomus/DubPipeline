@@ -412,7 +412,7 @@ def _format_all_strings(obj: Any, variables: Dict[str, Any]) -> Any:
     return obj
 
 
-def _resolve_paths(raw: Dict[str, Any], project_dir: Path) -> PathsConfig:
+def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool = True) -> PathsConfig:
     paths = raw.get("paths", {}) or {}
     tmpl = (paths.get("templates", {}) or {})
     # Backward-compat (old keys)
@@ -427,8 +427,8 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path) -> PathsConfig:
     if not out_dir.is_absolute():
         out_dir = (workdir / out_dir).resolve()
 
-    p = Path(out_dir)
-    p.mkdir(parents=True, exist_ok=True)
+    if create_dirs:
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     # input_video can be at root or in paths; prefer paths.input_video
     input_video_s = paths.get("input_video") or raw.get("input_video") or "{project_name}.mp4"
@@ -497,6 +497,7 @@ def load_pipeline_config_ex(
     pipeline_file: Path,
     *,
     cli_set: Optional[list[str]] = None,
+    create_dirs: bool = True,
 ) -> PipelineConfig:
     """Load config with precedence: defaults -> yaml -> env -> cli."""
     if not pipeline_file.exists():
@@ -520,7 +521,7 @@ def load_pipeline_config_ex(
     merged = _deep_merge(merged, _parse_cli_set_args(cli_set or []))
 
     # resolve paths (needs project_dir)
-    paths_cfg = _resolve_paths(merged, project_dir)
+    paths_cfg = _resolve_paths(merged, project_dir, create_dirs=create_dirs)
 
     # build nested configs (typed)
     languages = LanguagesConfig(**(merged.get("languages") or {}))

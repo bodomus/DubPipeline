@@ -1,25 +1,34 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import shutil
 from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
-from dubpipeline.steps import (
-    step_whisperx,
-    step_tts,
-    step_align,
-    step_merge_py,
-    step_translate,
-)
 from dubpipeline.utils.logging import info, init_logger
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
 from dubpipeline.utils.timing import timed_run, timed_block
-from .config import load_pipeline_config_ex
-from .steps import step_extract_audio
+from .config import PipelineConfig, load_pipeline_config_ex
+
+STEP_ID_TO_CFG_FIELD = {
+    "extract_audio": "extract_audio",
+    "asr": "asr_whisperx",
+    "translate": "translate",
+    "tts": "tts",
+    "merge": "merge",
+}
+
+STEP_ID_TO_INTERNAL = {
+    "extract_audio": "01_extract_audio",
+    "asr": "02_asr_whisperx",
+    "translate": "03_translate",
+    "tts": "04_tts+align",
+    "merge": "05_merge",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,70 +57,204 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Переместить выходные файлы в указанную директорию (переопределяет YAML/ENV).",
     )
+    parser.add_argument("--recursive", action="store_true", help="Рекурсивный обход входной папки.")
+    parser.add_argument("--glob", default=None, metavar="PATTERN", help="Фильтр файлов по glob-шаблону.")
+    parser.add_argument("--out", default=None, metavar="DIR", help="Директория временных файлов (paths.out_dir).")
+    parser.add_argument("--lang-src", default=None, metavar="LANG", help="Язык источника.")
+    parser.add_argument("--lang-dst", default=None, metavar="LANG", help="Язык назначения.")
+    parser.add_argument(
+        "--steps",
+        default=None,
+        metavar="LIST",
+        help="Шаги: patch-форма (+asr,-tts) или list-форма (asr,translate,tts,merge).",
+    )
+    parser.add_argument("--usegpu", action="store_true", help="Принудительно использовать GPU.")
+    parser.add_argument("--cpu", action="store_true", help="Принудительно использовать CPU.")
+    parser.add_argument("--rebuild", action="store_true", help="Принудительно пересоздать артефакты шагов.")
+    parser.add_argument("--delete-temp", action="store_true", help="Удалять temp/work файлы по завершении.")
+    parser.add_argument("--keep-temp", action="store_true", help="Не удалять temp/work файлы по завершении.")
+    parser.add_argument("--plan", action="store_true", help="Dry-run: показать план и завершить без выполнения.")
     return parser
 
 
-def rebuild_cleanup_safe(cfg) -> None:
-    """Cleanup без if-лесенок."""
-    # файл
-    Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
+def _parse_steps_arg(raw_steps: str, parser: argparse.ArgumentParser) -> dict[str, bool]:
+    tokens = [t.strip() for t in raw_steps.split(",") if t.strip()]
+    if not tokens:
+        parser.error("--steps не должен быть пустым")
 
-    # папки
+    is_patch_mode = all(t[0] in "+-" for t in tokens)
+    if not is_patch_mode and any(t[0] in "+-" for t in tokens):
+        parser.error("--steps: нельзя смешивать patch- и list-формы")
+
+    allowed = sorted(STEP_ID_TO_CFG_FIELD.keys())
+
+    def _validate(step_id: str) -> None:
+        if step_id not in STEP_ID_TO_CFG_FIELD:
+            parser.error(f"Неизвестный шаг '{step_id}' в --steps. Допустимые: {', '.join(allowed)}")
+
+    parsed: dict[str, bool] = {}
+    if is_patch_mode:
+        for token in tokens:
+            sign, step_id = token[0], token[1:]
+            _validate(step_id)
+            parsed[step_id] = sign == "+"
+        return parsed
+
+    enabled = set()
+    for token in tokens:
+        _validate(token)
+        enabled.add(token)
+    for step_id in STEP_ID_TO_CFG_FIELD:
+        parsed[step_id] = step_id in enabled
+    return parsed
+
+
+def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[str]:
+    if args.usegpu and args.cpu:
+        parser.error("Нельзя одновременно указывать --usegpu и --cpu")
+    if args.delete_temp and args.keep_temp:
+        parser.error("Нельзя одновременно указывать --delete-temp и --keep-temp")
+
+    cli_set = list(args.set)
+    if args.move_to_dir is not None:
+        cli_set.append(f"output.move_to_dir={args.move_to_dir}")
+    if args.out is not None:
+        cli_set.append(f"paths.out_dir={args.out}")
+    if args.lang_src is not None:
+        cli_set.append(f"languages.src={args.lang_src}")
+    if args.lang_dst is not None:
+        cli_set.append(f"languages.tgt={args.lang_dst}")
+    if args.usegpu:
+        cli_set.append("usegpu=true")
+    if args.cpu:
+        cli_set.append("usegpu=false")
+    if args.rebuild:
+        cli_set.append("rebuild=true")
+    if args.delete_temp:
+        cli_set.append("cleanup=true")
+    if args.keep_temp:
+        cli_set.append("cleanup=false")
+
+    if args.steps is not None:
+        parsed_steps = _parse_steps_arg(args.steps, parser)
+        patch_mode = all(tok.strip().startswith(("+", "-")) for tok in args.steps.split(",") if tok.strip())
+        if patch_mode:
+            for step_id, enabled in parsed_steps.items():
+                field = STEP_ID_TO_CFG_FIELD[step_id]
+                cli_set.append(f"steps.{field}={'true' if enabled else 'false'}")
+        else:
+            for step_id, enabled in parsed_steps.items():
+                field = STEP_ID_TO_CFG_FIELD[step_id]
+                cli_set.append(f"steps.{field}={'true' if enabled else 'false'}")
+
+    return cli_set
+
+
+def _discover_input_files(cfg: PipelineConfig, *, recursive: bool, glob_pattern: str | None) -> list[Path]:
+    source = Path(cfg.paths.input_video)
+    if source.is_file():
+        files = [source]
+    elif source.is_dir():
+        pattern = glob_pattern or "*"
+        iterator = source.rglob(pattern) if recursive else source.glob(pattern)
+        files = sorted([p for p in iterator if p.is_file()])
+    else:
+        files = []
+
+    if source.is_file() and glob_pattern:
+        files = [p for p in files if p.match(glob_pattern)]
+    return files
+
+
+def _format_steps(cfg: PipelineConfig) -> list[str]:
+    rows: list[str] = []
+    for step_id, field in STEP_ID_TO_CFG_FIELD.items():
+        enabled = bool(getattr(cfg.steps, field))
+        status = "enabled" if enabled else "disabled"
+        rows.append(f"  - {step_id} ({STEP_ID_TO_INTERNAL[step_id]}): {status}")
+    return rows
+
+
+def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mode: bool) -> None:
+    mode = "PLAN" if plan_mode else "RUN"
+    print(f"[dubpipeline] Effective config summary ({mode})")
+    print(f"  project_name: {cfg.project_name}")
+    print(f"  input_video: {cfg.paths.input_video}")
+    print(f"  out_dir: {cfg.paths.out_dir}")
+    print(f"  lang: {cfg.languages.src} -> {cfg.languages.tgt}")
+    print(f"  device: {'gpu' if cfg.usegpu else 'cpu'}")
+    print(f"  rebuild: {cfg.rebuild}")
+    print(f"  cleanup_temp: {cfg.cleanup}")
+    print("  steps:")
+    for row in _format_steps(cfg):
+        print(row)
+    print(f"  input_files_count: {len(files)}")
+    for path in files:
+        print(f"    * {path}")
+
+
+def _build_cfg_for_input(base_cfg: PipelineConfig, input_file: Path) -> PipelineConfig:
+    cfg = copy.deepcopy(base_cfg)
+    cfg.project_name = input_file.stem
+    cfg.paths.input_video = input_file.resolve()
+
+    out_dir = Path(cfg.paths.out_dir)
+    cfg.paths.audio_wav = out_dir / f"{cfg.project_name}.wav"
+    cfg.paths.segments_file = out_dir / f"{cfg.project_name}.segments.json"
+    cfg.paths.segments_ru_file = out_dir / f"{cfg.project_name}.segments.ru.json"
+    cfg.paths.srt_file_en = out_dir / f"{cfg.project_name}.srt"
+    cfg.paths.tts_segments_dir = out_dir / "segments" / "tts_ru_segments"
+    cfg.paths.tts_segments_aligned_dir = out_dir / "segments" / "tts_ru_segments_aligned"
+    cfg.paths.final_video = out_dir / f"{cfg.project_name}.ru.muxed.mp4"
+    return cfg
+
+
+def rebuild_cleanup_safe(cfg) -> None:
+    Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
     shutil.rmtree(Path(cfg.paths.tts_segments_dir), ignore_errors=True)
     shutil.rmtree(Path(cfg.paths.tts_segments_aligned_dir), ignore_errors=True)
 
 
 def cleanup_garbage(cfg, pipeline_path: Path) -> None:
-    """
-    Удаляет временные файлы ПОСЛЕ успешного завершения пайплайна.
-    Оставляет финальный *.ru.muxed.mp4.
-    """
-    # На Windows нельзя удалить открытый лог — закрываем handlers
     logging.shutdown()
 
     out_dir = Path(cfg.paths.out_dir)
     if out_dir.exists():
-        # wav/json/log по префиксу проекта
         patterns = [
             f"{cfg.project_name}*.wav",
             f"{cfg.project_name}*.json",
             f"{cfg.project_name}*.log",
         ]
         if cfg.delete_srt:
-            patterns.append(f"{cfg.project_name}*.srt")  # или точное имя файла(ов)
+            patterns.append(f"{cfg.project_name}*.srt")
 
         for pat in patterns:
             for f in out_dir.glob(pat):
                 try:
                     f.unlink()
-                except FileNotFoundError:
-                    pass
-                except PermissionError:
+                except (FileNotFoundError, PermissionError):
                     pass
 
-        # pipeline.yaml (в папке проекта)
         try:
             (out_dir / f"{cfg.project_name}.pipeline.yaml").unlink(missing_ok=True)
         except Exception:
             pass
 
-    # конкретный pipeline_path, который передали в CLI
     try:
         pipeline_path.unlink(missing_ok=True)
     except Exception:
         pass
 
-    # сегменты целиком
     shutil.rmtree(out_dir / "segments", ignore_errors=True)
 
 
-# важно: info должна быть уже доступна в момент объявления функции
-# (декоратор выполняется при импорте модуля)
 @timed_run(log=info, run_name="RUN", top_n=50)
 def run_pipeline(cfg, pipeline_path: Path) -> None:
-    # Гарантия инициализации статического репозитория конфига (на случай вызова run_pipeline не из CLI main)
+    from dubpipeline.steps import step_align, step_merge_py, step_translate, step_tts, step_whisperx
+    from .steps import step_extract_audio
+
     Const.bind(cfg)
-    device = cfg.device  # уже вычисляется property
+    device = cfg.device
     compute_type = cfg.compute_type
 
     log_run_header(
@@ -130,7 +273,6 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
             rebuild_cleanup_safe(cfg)
 
     def tts_and_align(c) -> None:
-        # хотите видеть отдельно tts и align — делаем два блока
         with timed_block("04a_tts", log=info):
             step_tts.run(c)
         with timed_block("04b_align", log=info):
@@ -148,8 +290,6 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         if not enabled:
             info(f"[dubpipeline] Шаг {name} отключён в конфиге.")
             continue
-
-        # вот это и есть “замер всех наших шагов”
         with timed_block(name, log=info):
             fn(cfg)
 
@@ -167,36 +307,33 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
             cleanup_garbage(cfg, pipeline_path)
 
 
-def rebuild_cleanup(cfg):
-    # файл
-    Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
-
-    # папки
-    shutil.rmtree(Path(cfg.paths.tts_segments_dir), ignore_errors=True)
-    shutil.rmtree(Path(cfg.paths.tts_segments_aligned_dir), ignore_errors=True)
-
-
 def main() -> None:
-
-    print("DUB-21 https://bodomus.youtrack.cloud/issue/DUB-21")
     parser = build_parser()
     args = parser.parse_args()
 
-    cli_set = list(args.set)
-    if args.move_to_dir is not None:
-        cli_set.append(f"output.move_to_dir={args.move_to_dir}")
-
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
-    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set)
-    Const.bind(cfg)
+    cli_set = _build_cli_set(args, parser)
+
+    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set, create_dirs=not args.plan)
+    if not args.plan:
+        Path(cfg.paths.out_dir).mkdir(parents=True, exist_ok=True)
+
+    files = _discover_input_files(cfg, recursive=args.recursive, glob_pattern=args.glob)
+    _print_effective_summary(cfg, files, plan_mode=args.plan)
+
+    if args.plan:
+        return
+
+    if not files:
+        parser.error(f"Не найдено входных файлов для '{cfg.paths.input_video}'")
 
     log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
     init_logger(log_path)
 
-    commands: dict[str, Callable] = {
-        "run": lambda c: run_pipeline(c, pipeline_path),
-    }
-    commands[args.command](cfg)
+    for input_file in files:
+        run_cfg = _build_cfg_for_input(cfg, input_file)
+        Const.bind(run_cfg)
+        run_pipeline(run_cfg, pipeline_path)
 
 
 if __name__ == "__main__":
