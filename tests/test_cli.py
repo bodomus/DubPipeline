@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 from dubpipeline.cli import (
@@ -64,8 +66,17 @@ class CliTests(unittest.TestCase):
 
     def test_in_file_and_in_dir_are_mutually_exclusive(self):
         parser = build_parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args(["run", "video.pipeline.yaml", "--in-file", "a.mp4", "--in-dir", "."])
+        cases = [
+            ["run", "video.pipeline.yaml", "--in-file", "a.mp4", "--in-dir", "."],
+            ["run", "video.pipeline.yaml", "--in-dir", ".", "--in-file", "a.mp4"],
+        ]
+        for argv in cases:
+            with self.subTest(argv=argv):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit):
+                        parser.parse_args(argv)
+                self.assertIn("not allowed with argument", stderr.getvalue())
 
     def test_in_file_overrides_input_video(self):
         parser = build_parser()
