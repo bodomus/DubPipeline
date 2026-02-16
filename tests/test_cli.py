@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from uuid import uuid4
 
 from dubpipeline.cli import (
     _build_cli_set,
@@ -13,10 +14,18 @@ from dubpipeline.cli import (
     _resolve_input_options,
     build_parser,
 )
-from dubpipeline.config import load_pipeline_config_ex
+from dubpipeline.config import load_pipeline_config_ex, save_pipeline_yaml
 
 
 class CliTests(unittest.TestCase):
+    @staticmethod
+    def _case_dir(prefix: str) -> Path:
+        root = Path("tests/.tmp_runtime")
+        root.mkdir(parents=True, exist_ok=True)
+        case = root / f"{prefix}_{uuid4().hex}"
+        case.mkdir(parents=True, exist_ok=True)
+        return case
+
     def test_help_contains_new_flags(self):
         help_text = build_parser().format_help()
         for flag in [
@@ -169,6 +178,46 @@ paths:
                 create_dirs=False,
             )
             self.assertTrue(str(cfg.paths.out_dir).endswith("out_from_cli"))
+
+    def test_save_pipeline_yaml_persists_update_existing_settings(self):
+        root = self._case_dir("cli_save_update_existing")
+        pipeline_file = root / "sample.pipeline.yaml"
+        values = {
+            "-PROJECT-": "sample",
+            "-OUT-": "out",
+            "-IN-": "sample.mp4",
+            "-MODES-": "Overwrite+Reorder",
+            "-GPU-": True,
+            "-REBUILD-": False,
+            "-SRT-": False,
+            "-CLEANUP-": False,
+            "-MOVE_TO_DIR-": "",
+            "-UPDATE_EXISTING_FILE-": True,
+        }
+
+        save_pipeline_yaml(values, pipeline_file)
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertTrue(cfg.output.update_existing_file)
+        self.assertEqual(cfg.output.audio_update_mode, "overwrite_reorder")
+
+    def test_legacy_mode_is_normalized_to_audio_update_mode(self):
+        root = self._case_dir("cli_legacy_mode")
+        pipeline_file = root / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+mode: Русская дорожка первой
+paths:
+  workdir: .
+  out_dir: out
+  input_video: source.mp4
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+        self.assertEqual(cfg.output.audio_update_mode, "overwrite_reorder")
 
 
 if __name__ == "__main__":

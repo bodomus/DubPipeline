@@ -10,7 +10,7 @@ import re
 import time
 import shutil
 
-from dubpipeline.config import save_pipeline_yaml, get_voice
+from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode
 from dubpipeline.steps.step_tts import getVoices
 
 from dubpipeline.utils.logging import  info
@@ -35,6 +35,30 @@ DEFAULT_STEPS = {
     "align": True,
     "merge": True,
 }
+
+
+MODE_DISPLAY_BY_VALUE = {
+    "add": "Add",
+    "overwrite": "Overwrite",
+    "overwrite_reorder": "Overwrite+Reorder",
+}
+
+MODE_VALUE_BY_DISPLAY = {v: k for k, v in MODE_DISPLAY_BY_VALUE.items()}
+
+UPDATE_EXISTING_WARNING = (
+    "Исходный файл будет заменён при успехе. "
+    "При ошибке исходник останется без изменений."
+)
+
+AUDIO_MODE_TOOLTIP = (
+    "Add: сохраняет исходные дорожки и добавляет дубляж в конец.\n"
+    "Overwrite: сохраняет только новую дорожку дубляжа.\n"
+    "Overwrite+Reorder: ставит дубляж первой дорожкой, затем оставшиеся."
+)
+
+
+def _mode_to_display(value: str) -> str:
+    return MODE_DISPLAY_BY_VALUE.get(normalize_audio_update_mode(value), "Add")
 
 def show_app_constants():
     print(f'### DUBPIPELINE_TTS_MAX_RU_CHARS: {os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS")}')
@@ -227,6 +251,26 @@ def set_source_mode(window, is_dir: bool) -> None:
     window["-BROWSE_DIR-"].update(disabled=not is_dir)
 
 
+def sync_update_existing_controls(window, values) -> None:
+    update_existing = bool(values.get("-UPDATE_EXISTING_FILE-", False))
+    window["-OUT-"].update(disabled=update_existing)
+    window["-BROWSE_OUT-"].update(disabled=update_existing)
+    window["-UPDATE_WARNING-"].update(visible=update_existing)
+
+    if not update_existing:
+        return
+
+    is_dir_mode = bool(values.get("-SRC_DIR-", False))
+    if is_dir_mode:
+        candidate = values.get("-IN_DIR-", "").strip()
+    else:
+        in_path = values.get("-IN-", "").strip()
+        candidate = str(Path(in_path).expanduser().parent) if in_path else ""
+
+    if candidate:
+        window["-OUT-"].update(candidate)
+
+
 def handle_file_event(window, values, base_title: str) -> None:
     data = values["-FILE-"] or {}
     idx = data.get("idx", 0)
@@ -362,10 +406,13 @@ def handle_done_event(window, values, base_title: str, last_run_count: int) -> N
 def main():
     show_app_constants()
     sg.theme("SystemDefault")
-    mpeg_modes = ("Замена", "Добавление", "Русская дорожка первой")
+    audio_mode_labels = tuple(MODE_VALUE_BY_DISPLAY.keys())
     voices = getVoices()
     current_voice = get_voice()
     current_steps = normalize_steps(BASE_CFG.get("steps"))
+    base_output_cfg = BASE_CFG.get("output") or {}
+    default_update_existing = bool(base_output_cfg.get("update_existing_file", False))
+    default_mode_display = _mode_to_display(base_output_cfg.get("audio_update_mode", BASE_CFG.get("mode", "add")))
 
     video_exts = {".mp4", ".mkv", ".mov", ".avi"}
 
@@ -397,7 +444,21 @@ def main():
 
         [sg.Text("Выходная папка:"),
          sg.Input(key="-OUT-", expand_x=True),
-         sg.FolderBrowse("...")],
+         sg.FolderBrowse("...", key="-BROWSE_OUT-")],
+
+        [sg.Checkbox(
+            "Обновлять существующий видеофайл",
+            key="-UPDATE_EXISTING_FILE-",
+            default=default_update_existing,
+            enable_events=True,
+        )],
+        [sg.Text(
+            UPDATE_EXISTING_WARNING,
+            key="-UPDATE_WARNING-",
+            text_color="orange",
+            visible=default_update_existing,
+            expand_x=True,
+        )],
 
         [sg.Text("Переместить в папку:"),
          sg.Input(key="-MOVE_TO_DIR-", expand_x=True, enable_events=True),
@@ -411,11 +472,12 @@ def main():
          sg.Text(steps_summary(current_steps), key="-STEPS_SUMMARY-", expand_x=True)],
         [sg.Text("Режим добавления аудио:"),
          sg.Combo(
-             values=mpeg_modes,
+             values=audio_mode_labels,
              key="-MODES-",
              readonly=True,
              enable_events=True,
-             default_value="Добавление",
+             default_value=default_mode_display,
+             tooltip=AUDIO_MODE_TOOLTIP,
              size=(40, 1),
          )],
 
@@ -457,6 +519,12 @@ def main():
     running = False
     last_run_count = 0
     set_source_mode(window, False)
+    sync_update_existing_controls(window, {
+        "-UPDATE_EXISTING_FILE-": bool(window["-UPDATE_EXISTING_FILE-"].get()),
+        "-SRC_DIR-": False,
+        "-IN-": window["-IN-"].get(),
+        "-IN_DIR-": window["-IN_DIR-"].get(),
+    })
 
     while True:
         event, values = window.read()
@@ -469,6 +537,7 @@ def main():
 
         if event in ("-SRC_FILE-", "-SRC_DIR-"):
             set_source_mode(window, bool(values.get("-SRC_DIR-")))
+            sync_update_existing_controls(window, values)
 
         # Автозаполнение Project name по имени файла
         if event == "-IN-" and values.get("-SRC_FILE-", True):
@@ -476,6 +545,13 @@ def main():
             if path_str:
                 p = Path(path_str)
                 window["-PROJECT-"].update(p.stem)
+            sync_update_existing_controls(window, values)
+
+        if event == "-IN_DIR-":
+            sync_update_existing_controls(window, values)
+
+        if event == "-UPDATE_EXISTING_FILE-":
+            sync_update_existing_controls(window, values)
 
         # Выбор голоса (если надо, можно куда-то логировать)
         if event == "-VOICE-":

@@ -203,6 +203,8 @@ def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mod
     print(f"  device: {'gpu' if cfg.usegpu else 'cpu'}")
     print(f"  rebuild: {cfg.rebuild}")
     print(f"  cleanup_temp: {cfg.cleanup}")
+    print(f"  update_existing_file: {cfg.output.update_existing_file}")
+    print(f"  audio_update_mode: {cfg.output.audio_update_mode}")
     print("  steps:")
     for row in _format_steps(cfg):
         print(row)
@@ -347,8 +349,11 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("99_delete_srt", log=info):
             Path(cfg.paths.srt_file_en).unlink(missing_ok=True)
 
-    mover = OutputMover(cfg.output.move_to_dir, base_dir=cfg.paths.workdir)
-    mover.move_outputs([Path(cfg.paths.final_video)])
+    if cfg.output.update_existing_file:
+        info("[dubpipeline] Move output skipped: update_existing_file=true")
+    else:
+        mover = OutputMover(cfg.output.move_to_dir, base_dir=cfg.paths.workdir)
+        mover.move_outputs([Path(cfg.paths.final_video)])
 
     success = True
 
