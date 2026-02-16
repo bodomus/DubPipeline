@@ -220,6 +220,145 @@ def persist_move_to_dir(path: str) -> None:
         yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
 
 
+def set_source_mode(window, is_dir: bool) -> None:
+    window["-IN-"].update(disabled=is_dir)
+    window["-BROWSE_FILE-"].update(disabled=is_dir)
+    window["-IN_DIR-"].update(disabled=not is_dir)
+    window["-BROWSE_DIR-"].update(disabled=not is_dir)
+
+
+def handle_file_event(window, values, base_title: str) -> None:
+    data = values["-FILE-"] or {}
+    idx = data.get("idx", 0)
+    total = data.get("total", 0)
+    name = data.get("name", "")
+    if total and idx:
+        window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
+        window["-PROJECT-"].update(name)
+        window["-IN-"].update(name)
+    else:
+        window["-STATUS-"].update(f"Статус: running — {name}")
+    try:
+        if total and idx:
+            window.TKroot.title(f"{base_title} — {idx}/{total}: {name}")
+        else:
+            window.TKroot.title(f"{base_title} — {name}")
+    except Exception:
+        pass
+
+
+def _prepare_folder_run(values, current_steps, video_exts, window):
+    in_dir = values.get("-IN_DIR-", "").strip()
+    if not in_dir or not os.path.isdir(in_dir):
+        sg.popup_error("Укажите корректную папку с видео.")
+        return None, 0
+
+    in_dir_p = Path(in_dir)
+    files = sorted(
+        [p for p in in_dir_p.iterdir() if p.is_file() and p.suffix.lower() in video_exts],
+        key=lambda p: p.name.lower(),
+    )
+    if not files:
+        sg.popup_error("В выбранной папке нет видео-файлов (*.mp4, *.mkv, *.mov, *.avi).")
+        return None, 0
+
+    base_out = values["-OUT-"].strip()
+    if not base_out:
+        base_out = str(in_dir_p)
+        window["-OUT-"].update(base_out)
+
+    run_items = []
+    for p in files:
+        project_name = p.stem
+        out_dir = str(Path(base_out) / project_name)
+
+        v = dict(values)
+        v["-IN-"] = str(p)
+        v["-PROJECT-"] = project_name
+        v["-OUT-"] = out_dir
+        v["-STEPS-"] = dict(current_steps)
+
+        pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
+        pipeline_file.parent.mkdir(parents=True, exist_ok=True)
+        if not pipeline_file.exists():
+            shutil.copy2(TEMPLATE_PATH, pipeline_file)
+
+        pipeline_path = save_pipeline_yaml(v, pipeline_file)
+        run_items.append((p.name, ["run", str(pipeline_path)]))
+
+    return run_items, len(run_items)
+
+
+def _prepare_single_file_run(values, current_steps, window):
+    input_path = values["-IN-"].strip()
+    if not input_path or not os.path.isfile(input_path):
+        sg.popup_error("Укажите корректный путь к входному видео.")
+        return None, 0
+
+    base_out = values["-OUT-"].strip()
+    if not base_out:
+        base_out = str(Path(input_path).parent)
+        window["-OUT-"].update(base_out)
+
+    base_project = values["-PROJECT-"].strip()
+    project_name = base_project or Path(input_path).stem
+    values["-PROJECT-"] = project_name
+    out_dir = str(Path(base_out) / project_name)
+    values["-OUT-"] = out_dir
+    values["-STEPS-"] = dict(current_steps)
+
+    pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
+    pipeline_file.parent.mkdir(parents=True, exist_ok=True)
+    if not pipeline_file.exists():
+        shutil.copy2(TEMPLATE_PATH, pipeline_file)
+
+    pipeline_path = save_pipeline_yaml(values, pipeline_file)
+    args = ["run", str(pipeline_path)]
+    return [(Path(input_path).name, args)], 1
+
+
+def handle_start_event(values, current_steps, video_exts, window):
+    if bool(values.get("-SRC_DIR-")):
+        run_items, run_count = _prepare_folder_run(values, current_steps, video_exts, window)
+        if not run_items:
+            return 0
+        window["-LOGBOX-"].update("")
+        window["-STATUS-"].update(f"Статус: running ({run_count} files)")
+        threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
+        return run_count
+
+    run_items, run_count = _prepare_single_file_run(values, current_steps, window)
+    if not run_items:
+        return 0
+    window["-LOGBOX-"].update("")
+    window["-STATUS-"].update("Статус: running")
+    threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
+    return run_count
+
+
+def handle_log_event(window, values) -> None:
+    raw = values["-LOG-"]
+    if raw is not None:
+        raw = raw.replace("\r", "\n")
+        for line in raw.splitlines():
+            if line:
+                print_parsed_log(window, line)
+
+
+def handle_done_event(window, values, base_title: str, last_run_count: int) -> None:
+    exit_code = values["-DONE-"]
+    try:
+        window.TKroot.title(base_title)
+    except Exception:
+        pass
+
+    status = "ok" if exit_code == 0 else f"error (code {exit_code})"
+    if last_run_count > 1 and exit_code == 0:
+        window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
+    else:
+        window["-STATUS-"].update(f"Статус: {status}")
+
+
 def main():
     show_app_constants()
     sg.theme("SystemDefault")
@@ -317,46 +456,19 @@ def main():
     window["-CLEANUP-"].update(True)
     running = False
     last_run_count = 0
-
-    def set_source_mode(is_dir: bool) -> None:
-        window["-IN-"].update(disabled=is_dir)
-        window["-BROWSE_FILE-"].update(disabled=is_dir)
-        window["-IN_DIR-"].update(disabled=not is_dir)
-        window["-BROWSE_DIR-"].update(disabled=not is_dir)
-
-    set_source_mode(False)
+    set_source_mode(window, False)
 
     while True:
         event, values = window.read()
 
         if event == "-FILE-":
-            data = values["-FILE-"] or {}
-            idx = data.get("idx", 0)
-            total = data.get("total", 0)
-            name = data.get("name", "")
-
-            # Строка статуса (и для одиночного файла, и для папки)
-            if total and idx:
-                window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
-                window["-PROJECT-"].update(name)
-                window["-IN-"].update(name)
-            else:
-                window["-STATUS-"].update(f"Статус: running — {name}")
-
-            # Заголовок окна
-            try:
-                if total and idx:
-                    window.TKroot.title(f"{BASE_TITLE} — {idx}/{total}: {name}")
-                else:
-                    window.TKroot.title(f"{BASE_TITLE} — {name}")
-            except Exception:
-                pass
+            handle_file_event(window, values, BASE_TITLE)
 
         if event in (sg.WIN_CLOSED, "-EXIT-"):
             break
 
         if event in ("-SRC_FILE-", "-SRC_DIR-"):
-            set_source_mode(bool(values.get("-SRC_DIR-")))
+            set_source_mode(window, bool(values.get("-SRC_DIR-")))
 
         # Автозаполнение Project name по имени файла
         if event == "-IN-" and values.get("-SRC_FILE-", True):
@@ -377,119 +489,17 @@ def main():
             if running:
                 sg.popup("Процесс уже запущен, дождитесь окончания.", title="Инфо")
                 continue
-
-            is_dir_mode = bool(values.get("-SRC_DIR-"))
-            base_out = values["-OUT-"].strip()
-            base_project = values["-PROJECT-"].strip()
-
-            # --- Режим: папка ---
-            if is_dir_mode:
-                in_dir = values.get("-IN_DIR-", "").strip()
-                if not in_dir or not os.path.isdir(in_dir):
-                    sg.popup_error("Укажите корректную папку с видео.")
-                    continue
-
-                in_dir_p = Path(in_dir)
-                files = sorted(
-                    [p for p in in_dir_p.iterdir() if p.is_file() and p.suffix.lower() in video_exts],
-                    key=lambda p: p.name.lower(),
-                )
-                if not files:
-                    sg.popup_error("В выбранной папке нет видео-файлов (*.mp4, *.mkv, *.mov, *.avi).")
-                    continue
-
-                # Если выход не указан — берём саму папку
-                if not base_out:
-                    base_out = str(in_dir_p)
-                    window["-OUT-"].update(base_out)
-
-                run_items = []
-                for p in files:
-                    project_name = f"{p.stem}"
-                    out_dir = str(Path(base_out) / project_name)  # под-папка, чтобы не было коллизий
-
-                    v = dict(values)
-                    v["-IN-"] = str(p)
-                    v["-PROJECT-"] = project_name
-                    v["-OUT-"] = out_dir
-                    v["-STEPS-"] = dict(current_steps)
-
-                    pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
-                    pipeline_file.parent.mkdir(parents=True, exist_ok=True)
-                    if not pipeline_file.exists():
-                        shutil.copy2(TEMPLATE_PATH, pipeline_file)
-
-                    pipeline_path = save_pipeline_yaml(v, pipeline_file)
-                    run_items.append((p.name, ["run", str(pipeline_path)]))
-
-                last_run_count = len(run_items)
-                window["-LOGBOX-"].update("")
-                window["-STATUS-"].update(f"Статус: running ({last_run_count} files)")
+            run_count = handle_start_event(values, current_steps, video_exts, window)
+            if run_count:
+                last_run_count = run_count
                 running = True
-                threading.Thread(
-                    target=run_pipeline_sequence, args=(run_items, window), daemon=True
-                ).start()
-                continue
-
-            # --- Режим: один файл ---
-            input_path = values["-IN-"].strip()
-            if not input_path or not os.path.isfile(input_path):
-                sg.popup_error("Укажите корректный путь к входному видео.")
-                continue
-
-            # Если выход не указан — берём папку входного файла
-            if not base_out:
-                base_out = str(Path(input_path).parent)
-                window["-OUT-"].update(base_out)
-
-            project_name = base_project or Path(input_path).stem
-            values["-PROJECT-"] = project_name
-            out_dir = str(Path(base_out) / project_name)
-            values["-OUT-"] = out_dir
-            values["-STEPS-"] = dict(current_steps)
-
-            pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
-            pipeline_file.parent.mkdir(parents=True, exist_ok=True)
-            if not pipeline_file.exists():
-                shutil.copy2(TEMPLATE_PATH, pipeline_file)
-
-            pipeline_path = save_pipeline_yaml(values, pipeline_file)
-            args = ["run", str(pipeline_path)]
-
-            last_run_count = 1
-            window["-LOGBOX-"].update("")
-            window["-STATUS-"].update("Статус: running")
-            running = True
-
-            worker_thread = threading.Thread(
-                target=run_pipeline_sequence, args=([(Path(input_path).name, args)], window), daemon=True
-            )
-            worker_thread.start()
 
         if event == "-LOG-":
-            raw = values["-LOG-"]
-            if raw is not None:
-                raw = raw.replace("\r", "\n")
-
-                for line in raw.splitlines():
-                    if not line:
-                        continue
-                    print_parsed_log(window, line)
+            handle_log_event(window, values)
 
         if event == "-DONE-":
-            exit_code = values["-DONE-"]
             running = False
-
-            try:
-                window.TKroot.title(BASE_TITLE)
-            except Exception:
-                pass
-
-            status = "ok" if exit_code == 0 else f"error (code {exit_code})"
-            if last_run_count > 1 and exit_code == 0:
-                window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
-            else:
-                window["-STATUS-"].update(f"Статус: {status}")
+            handle_done_event(window, values, BASE_TITLE, last_run_count)
 
         if event == "-STEPS-":
             current_steps = show_steps_modal(window, current_steps)
