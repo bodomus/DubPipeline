@@ -2,11 +2,12 @@ import argparse
 import subprocess
 from pathlib import Path
 
-from dubpipeline.config import PipelineConfig
+from dubpipeline.config import PipelineConfig, normalize_audio_update_mode
 from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
+from dubpipeline.utils.atomic_replace import AtomicFileReplacer
 
 def mux_replace(
     video: Path,
@@ -108,12 +109,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--mode",
-        choices=["replace", "add", "rus_first"],
-        default="replace",
+        choices=["replace", "add", "rus_first", "overwrite", "overwrite_reorder"],
+        default="add",
         help=(
-            "Режим: replace=заменить оригинальную аудиодорожку, "
-            "add=добавить русскую как вторую, "
-            "rus_first=добавить русскую и сделать первой"
+            "Режим: add=добавить русскую дорожку, "
+            "overwrite/replace=перезаписать текущую, "
+            "overwrite_reorder/rus_first=перезаписать и поставить русскую первой"
         ),
     )
     p.add_argument(
@@ -132,12 +133,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def resolve_mux_mode(mode: str) -> MuxMode:
-    mode = (mode or "").strip()
-    if mode in ("Замена", "replace"):
-        return MuxMode.REPLACE
-    if mode in ("Добавление", "add"):
+    normalized = normalize_audio_update_mode(mode)
+    if normalized == "add":
         return MuxMode.ADD
-    if mode in ("Изменить порядок", "Русская дорожка первой", "rus_first"):
+    if normalized == "overwrite":
+        return MuxMode.REPLACE
+    if normalized == "overwrite_reorder":
         return MuxMode.RUS_FIRST
     raise ValueError(f"Unknown mux mode: {mode}")
 
@@ -146,6 +147,9 @@ def run(cfg:PipelineConfig) -> None:
     Const.bind(cfg)
     video = cfg.paths.input_video
     audio = cfg.paths.audio_wav
+    output_cfg = getattr(cfg, "output", None)
+    update_existing = bool(getattr(output_cfg, "update_existing_file", False))
+    configured_mode = getattr(output_cfg, "audio_update_mode", "") or cfg.mode
     out_path = cfg.paths.final_video
 #
     #(venv) λ python .\tools\mux_ru_audio.py ^
@@ -165,9 +169,24 @@ def run(cfg:PipelineConfig) -> None:
 
     print(f"Video: {video}\n")
     print(f"Audio (RU full): {audio}\n")
-    print(f"Output: {out_path}\n")
-    print(f"Mode: {cfg.mode}\n")
+    mux_mode = resolve_mux_mode(configured_mode)
+    effective_output = video if update_existing else out_path
+    print(f"Output: {effective_output}\n")
+    print(f"Mode: {configured_mode}\n")
+    info(f"[merge] audio update mode: {configured_mode}")
 
-    mux_mode = resolve_mux_mode(cfg.mode)
-    mux_smart(video, audio, out_path, mode=mux_mode)
+    if not update_existing:
+        mux_smart(video, audio, out_path, mode=mux_mode)
+        return
+
+    replacer = AtomicFileReplacer()
+    temp_out = replacer.make_temp_path(video)
+    info(f"[merge] update_existing_file enabled; temp output: {temp_out}")
+
+    try:
+        mux_smart(video, audio, temp_out, mode=mux_mode)
+        replacer.replace_with_temp(video, temp_out, keep_backup=False)
+    except Exception:
+        replacer.cleanup_temp(temp_out)
+        raise
 

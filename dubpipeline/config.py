@@ -4,6 +4,7 @@ import copy
 import json
 import os
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
@@ -36,6 +37,34 @@ from dubpipeline.utils.logging import info, warn
 class LanguagesConfig:
     src: str = "en"
     tgt: str = "ru"
+
+
+class AudioUpdateMode(str, Enum):
+    ADD = "add"
+    OVERWRITE = "overwrite"
+    OVERWRITE_REORDER = "overwrite_reorder"
+
+
+_AUDIO_MODE_ALIASES: dict[str, str] = {
+    "add": AudioUpdateMode.ADD.value,
+    "добавление": AudioUpdateMode.ADD.value,
+    "overwrite": AudioUpdateMode.OVERWRITE.value,
+    "replace": AudioUpdateMode.OVERWRITE.value,
+    "замена": AudioUpdateMode.OVERWRITE.value,
+    "overwrite+reorder": AudioUpdateMode.OVERWRITE_REORDER.value,
+    "overwrite + reorder": AudioUpdateMode.OVERWRITE_REORDER.value,
+    "overwrite_reorder": AudioUpdateMode.OVERWRITE_REORDER.value,
+    "rus_first": AudioUpdateMode.OVERWRITE_REORDER.value,
+    "изменить порядок": AudioUpdateMode.OVERWRITE_REORDER.value,
+    "русская дорожка первой": AudioUpdateMode.OVERWRITE_REORDER.value,
+}
+
+
+def normalize_audio_update_mode(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return AudioUpdateMode.ADD.value
+    return _AUDIO_MODE_ALIASES.get(raw, AudioUpdateMode.ADD.value)
 
 
 @dataclass
@@ -182,6 +211,8 @@ class MuxConfig:
 @dataclass
 class OutputConfig:
     move_to_dir: str = ""
+    update_existing_file: bool = False
+    audio_update_mode: str = AudioUpdateMode.ADD.value
 
 
 @dataclass
@@ -244,7 +275,10 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "translate": asdict(TranslateConfig()),
     "tts": asdict(TtsConfig()),
     "mux": asdict(MuxConfig()),
-    "output": asdict(OutputConfig()),
+    "output": {
+        "move_to_dir": "",
+        "update_existing_file": False,
+    },
 }
 
 
@@ -342,6 +376,8 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TRANSLATE_RELEASE_VRAM": "translate.release_vram",
         # Output
         "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
+        "DUBPIPELINE_OUTPUT_UPDATE_EXISTING_FILE": "output.update_existing_file",
+        "DUBPIPELINE_OUTPUT_AUDIO_UPDATE_MODE": "output.audio_update_mode",
     }
 
     overrides: Dict[str, Any] = {}
@@ -541,7 +577,10 @@ def load_pipeline_config_ex(
     translate = TranslateConfig(**(merged.get("translate") or {}))
     tts = TtsConfig(**(merged.get("tts") or {}))
     mux = MuxConfig(**(merged.get("mux") or {}))
-    output = OutputConfig(**(merged.get("output") or {}))
+    output_raw = merged.get("output") or {}
+    output = OutputConfig(**output_raw)
+    mode_raw = output_raw.get("audio_update_mode", merged.get("mode"))
+    output.audio_update_mode = normalize_audio_update_mode(mode_raw)
 
     # inherit language defaults into mux if user didn't override
     if not mux.orig_lang:
@@ -594,8 +633,10 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     out_dir = values.get("-OUT-", "").strip() or (cfg.get("paths", {}) or {}).get("out_dir", "out")
     input_video = values.get("-IN-", "").strip() or (cfg.get("paths", {}) or {}).get("input_video", "{project_name}.mp4")
 
+    selected_mode = values.get("-MODES-", cfg.get("mode", "Добавление"))
+
     cfg["project_name"] = project_name
-    cfg["mode"] = values.get("-MODES-", cfg.get("mode", "Добавление"))
+    cfg["mode"] = selected_mode
     cfg["usegpu"] = bool(values.get("-GPU-", True))
     cfg["rebuild"] = bool(values.get("-REBUILD-", False))
     cfg["delete_srt"] = bool(values.get("-SRT-", False))
@@ -616,6 +657,12 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     cfg.setdefault("output", {})
     cfg["output"]["move_to_dir"] = values.get("-MOVE_TO_DIR-", cfg["output"].get("move_to_dir", ""))
+    cfg["output"]["update_existing_file"] = bool(
+        values.get("-UPDATE_EXISTING_FILE-", cfg["output"].get("update_existing_file", False))
+    )
+    cfg["output"]["audio_update_mode"] = normalize_audio_update_mode(
+        values.get("-MODES-", cfg["output"].get("audio_update_mode", selected_mode))
+    )
 
     pipeline_path = pipeline_path.resolve()
     pipeline_path.parent.mkdir(parents=True, exist_ok=True)
