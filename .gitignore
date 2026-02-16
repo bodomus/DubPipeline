@@ -1,5 +1,5 @@
 http-client.private.env.json
-
+tests
 #Media files
 *.wav
 *.mp4

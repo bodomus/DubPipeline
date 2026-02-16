@@ -54,6 +54,20 @@ def _audio_streams(info: dict) -> list[dict]:
     return [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
 
 
+def _media_duration_seconds(info: dict) -> float | None:
+    fmt = info.get("format") or {}
+    raw = fmt.get("duration")
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except Exception:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
 def _default_audio_pos(audio_streams: list[dict]) -> int | None:
     """
     Возвращает позицию (0..N-1) default-аудио среди аудио-потоков, если есть.
@@ -85,10 +99,25 @@ def mux_smart(
     - старается НЕ перекодировать оригинальную аудио (copy), только русскую -> aac
     - при несовместимости откатывается на aac для всех аудио
     """
-    info = ffprobe_info(video, ffprobe=ffprobe)
-    a_streams = _audio_streams(info)
+    video_info = ffprobe_info(video, ffprobe=ffprobe)
+    ru_info = ffprobe_info(ru_audio, ffprobe=ffprobe)
+
+    a_streams = _audio_streams(video_info)
     orig_a_count = len(a_streams)
     orig_default_pos = _default_audio_pos(a_streams)
+    video_duration = _media_duration_seconds(video_info)
+    ru_duration = _media_duration_seconds(ru_info)
+
+    # Avoid truncating output video when RU track is shorter.
+    # Keep -shortest only when RU is at least as long as source video.
+    use_shortest = False
+    if video_duration is not None and ru_duration is not None:
+        use_shortest = ru_duration >= (video_duration - 0.05)
+        if not use_shortest:
+            info(
+                f"[MUX] RU audio is shorter ({ru_duration:.3f}s) than video "
+                f"({video_duration:.3f}s). Omitting -shortest to keep full video."
+            )
 
     # -------- базовый cmd --------
     cmd = [
@@ -133,7 +162,9 @@ def mux_smart(
         raise ValueError(f"Unknown mode: {mode}")
 
     # -------- кодеки --------
-    cmd += ["-c:v", "copy", "-shortest"]
+    cmd += ["-c:v", "copy"]
+    if use_shortest:
+        cmd += ["-shortest"]
 
     # “умно”: оригинал копируем, русскую кодируем в AAC
     # (если это не получится — ниже сделаем fallback на aac для всех)
@@ -201,6 +232,9 @@ def mux_smart(
     # -------- запуск --------
     try:
         run_ffmpeg(cmd_best)
+    except SystemExit:
+        # если copy оригинала невозможен (например, DTS в MP4) — перекодируем всё в AAC
+        run_ffmpeg(cmd_fallback)
     except Exception:
         # если copy оригинала невозможен (например, DTS в MP4) — перекодируем всё в AAC
         run_ffmpeg(cmd_fallback)
