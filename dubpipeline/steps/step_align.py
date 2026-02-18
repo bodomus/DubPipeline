@@ -330,6 +330,10 @@ def mix_aligned_segments_to_timeline(
     Склеивает выровненные сегменты в одну дорожку по таймлайну start/end.
     Паузы между сегментами остаются тишиной.
     """
+    if not segments:
+        warn("[MIX] No segments to mix. Keeping existing audio as-is.")
+        return
+
     # Определим максимальный end, чтобы посчитать длину таймлайна
     t_mix0 = perf_counter()
     mix_metrics = []
@@ -356,7 +360,8 @@ def mix_aligned_segments_to_timeline(
             break
 
     if sr is None:
-        raise RuntimeError("No aligned WAVs found to determine sample rate")
+        warn("[MIX] No aligned WAVs found to determine sample rate. Keeping existing audio as-is.")
+        return
 
     if DEBUG:
         warn(f"[MIX] Using sample rate={sr}, channels={channels}\n")
@@ -455,8 +460,17 @@ def run(cfg:PipelineConfig):
     # сортируем по start на всякий случай
     segments = sorted(segments, key=lambda s: s["start"])
 
+    if not segments:
+        warn("[ALIGN] No translated segments found. Keeping extracted audio without remix.")
+        return
+
     step("Aligning segment durations...")
     align_segments(segments, tts_dir, aligned_dir)
+
+    any_aligned = any((aligned_dir / f"seg_{int(seg['id']):04d}.wav").exists() for seg in segments if "id" in seg)
+    if not any_aligned:
+        warn("[ALIGN] No aligned segment files were produced. Keeping extracted audio without remix.")
+        return
 
     step("Mixing aligned segments into single WAV...")
     mix_aligned_segments_to_timeline(segments, aligned_dir, out_mix_path)

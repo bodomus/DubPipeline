@@ -69,7 +69,9 @@ class CliTests(unittest.TestCase):
 
     def test_conflicting_temp_flags_are_error(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "video.pipeline.yaml", "--delete-temp", "--keep-temp"])
+        args = parser.parse_args(
+            ["run", "video.pipeline.yaml", "--delete-temp", "--keep-temp"]
+        )
         with self.assertRaises(SystemExit):
             _build_cli_set(args, parser)
 
@@ -92,7 +94,9 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "one.mp4"
             source.write_text("x", encoding="utf-8")
-            args = parser.parse_args(["run", "video.pipeline.yaml", "--in-file", str(source)])
+            args = parser.parse_args(
+                ["run", "video.pipeline.yaml", "--in-file", str(source)]
+            )
 
             cli_set = _build_cli_set(args, parser)
             self.assertIn(f"paths.input_video={source.resolve()}", cli_set)
@@ -102,20 +106,26 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source_dir = Path(tmp) / "videos"
             source_dir.mkdir(parents=True, exist_ok=True)
-            args = parser.parse_args(["run", "video.pipeline.yaml", "--in-dir", str(source_dir)])
+            args = parser.parse_args(
+                ["run", "video.pipeline.yaml", "--in-dir", str(source_dir)]
+            )
 
             cli_set = _build_cli_set(args, parser)
             self.assertIn(f"paths.input_video={source_dir.resolve()}", cli_set)
 
     def test_in_file_requires_existing_file(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "video.pipeline.yaml", "--in-file", "missing.mp4"])
+        args = parser.parse_args(
+            ["run", "video.pipeline.yaml", "--in-file", "missing.mp4"]
+        )
         with self.assertRaises(SystemExit):
             _build_cli_set(args, parser)
 
     def test_in_dir_requires_existing_dir(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "video.pipeline.yaml", "--in-dir", "missing_dir"])
+        args = parser.parse_args(
+            ["run", "video.pipeline.yaml", "--in-dir", "missing_dir"]
+        )
         with self.assertRaises(SystemExit):
             _build_cli_set(args, parser)
 
@@ -140,7 +150,9 @@ paths:
             )
             cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
 
-            recursive, glob_pattern = _resolve_input_options(cfg, parser, recursive=True, glob_pattern="*.mp4")
+            recursive, glob_pattern = _resolve_input_options(
+                cfg, parser, recursive=True, glob_pattern="*.mp4"
+            )
             self.assertFalse(recursive)
             self.assertIsNone(glob_pattern)
 
@@ -152,7 +164,9 @@ paths:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "one.mp4"
             source.write_text("x", encoding="utf-8")
-            args_cli = parser.parse_args(["run", "video.pipeline.yaml", "--in-file", str(source)])
+            args_cli = parser.parse_args(
+                ["run", "video.pipeline.yaml", "--in-file", str(source)]
+            )
             self.assertEqual(_detect_input_source(args_cli), "CLI")
 
     def test_cli_overrides_yaml_out(self):
