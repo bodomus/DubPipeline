@@ -2,6 +2,8 @@ import threading
 import subprocess
 import sys
 import os
+import tempfile
+from multiprocessing import Process, Queue
 from pathlib import Path
 
 import FreeSimpleGUI as sg
@@ -10,13 +12,10 @@ import re
 import time
 import shutil
 
-from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode
-from dubpipeline.steps.step_tts import getVoices
+from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode, load_pipeline_config_ex, pipeline_path
+from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
-from dubpipeline.utils.logging import  info
-
-
-import os
+from dubpipeline.utils.logging import info, error
 
 STEP_LABELS = {
     "extract_audio": "Извлечение аудио",
@@ -112,6 +111,88 @@ def print_parsed_log(window, line: str) -> None:
         ml.print(line, text_color="red")
     else:
         ml.print(line)
+
+
+class PreviewController:
+    def __init__(self) -> None:
+        self._worker: Process | None = None
+        self._queue: Queue | None = None
+        self._player: subprocess.Popen | None = None
+
+    def is_active(self) -> bool:
+        worker_alive = self._worker is not None and self._worker.is_alive()
+        player_alive = self._player is not None and self._player.poll() is None
+        return worker_alive or player_alive
+
+    def stop(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            self._worker.terminate()
+            self._worker.join(timeout=1)
+        self._worker = None
+        self._queue = None
+
+        if self._player is not None and self._player.poll() is None:
+            self._player.terminate()
+            try:
+                self._player.wait(timeout=1)
+            except Exception:
+                self._player.kill()
+        self._player = None
+
+    def start_preview(self, *, model_name: str, voice_id: str, preview_text: str, use_gpu: bool, window) -> None:
+        self.stop()
+        out_dir = Path(tempfile.gettempdir()) / "dubpipeline_preview"
+        out_file = out_dir / f"preview_{int(time.time() * 1000)}.wav"
+
+        queue: Queue = Queue()
+
+        def _worker_target(q: Queue) -> None:
+            try:
+                synthesize_preview_text(
+                    model_name=model_name,
+                    voice_id=voice_id,
+                    preview_text=preview_text,
+                    out_file=out_file,
+                    use_gpu=use_gpu,
+                )
+                q.put({"ok": True, "file": str(out_file)})
+            except Exception as ex:
+                q.put({"ok": False, "error": str(ex)})
+
+        proc = Process(target=_worker_target, args=(queue,), daemon=True)
+        proc.start()
+
+        self._worker = proc
+        self._queue = queue
+
+        def _monitor() -> None:
+            proc.join()
+            payload = {"ok": False, "error": "Preview synthesis cancelled"}
+            if queue is not None:
+                try:
+                    payload = queue.get_nowait()
+                except Exception:
+                    pass
+            window.write_event_value("-PREVIEW_READY-", payload)
+
+        threading.Thread(target=_monitor, daemon=True).start()
+
+    def play_file(self, audio_path: str) -> None:
+        cmd = [
+            "ffplay",
+            "-nodisp",
+            "-autoexit",
+            "-loglevel",
+            "error",
+            audio_path,
+        ]
+        self._player = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def _wait_playback() -> None:
+            if self._player is not None:
+                self._player.wait()
+
+        threading.Thread(target=_wait_playback, daemon=True).start()
 
 
 def run_pipeline(args_list, window):
@@ -407,8 +488,19 @@ def main():
     show_app_constants()
     sg.theme("SystemDefault")
     audio_mode_labels = tuple(MODE_VALUE_BY_DISPLAY.keys())
-    voices = getVoices()
-    current_voice = get_voice()
+    cfg = None
+    voices_load_error = ""
+    try:
+        cfg = load_pipeline_config_ex(pipeline_path)
+        voice_infos = list_voices(cfg)
+    except Exception as ex:
+        error(f"[GUI] Voices loading error: {ex}\n")
+        voice_infos = []
+        voices_load_error = str(ex)
+
+    voices = [v.display_name or v.id for v in voice_infos]
+    voice_id_by_display = {v.display_name or v.id: v.id for v in voice_infos}
+    current_voice = get_voice() if pipeline_path.exists() else ""
     current_steps = normalize_steps(BASE_CFG.get("steps"))
     base_output_cfg = BASE_CFG.get("output") or {}
     default_update_existing = bool(base_output_cfg.get("update_existing_file", False))
@@ -438,9 +530,12 @@ def main():
              key="-VOICE-",
              readonly=True,
              enable_events=True,
-             default_value=current_voice if current_voice != "" else voices[0] ,
+             default_value=(current_voice if current_voice in voices else (voices[0] if voices else "")),
+             disabled=(len(voices) == 0),
              size=(40, 1),
-         )],
+         ),
+         sg.Button("▶ Preview", key="-PREVIEW-", disabled=(len(voices) == 0)),
+         sg.Text("", key="-VOICE_ERROR-", text_color="red", size=(40, 1))],
 
         [sg.Text("Выходная папка:"),
          sg.Input(key="-OUT-", expand_x=True),
@@ -507,6 +602,7 @@ def main():
     )
 
     BASE_TITLE = "DubPipeline GUI"
+    preview = PreviewController()
 
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
@@ -525,9 +621,23 @@ def main():
         "-IN-": window["-IN-"].get(),
         "-IN_DIR-": window["-IN_DIR-"].get(),
     })
+    if voices:
+        _emit_info(window, f"Voices loaded: {len(voices)}")
+    else:
+        msg = voices_load_error or "Не удалось загрузить список голосов"
+        window["-VOICE_ERROR-"].update(msg)
+        _emit_info(window, f"Preview error: {msg}")
 
     while True:
-        event, values = window.read()
+        event, values = window.read(timeout=150)
+
+        if event == "__TIMEOUT__":
+            pass
+
+        if preview._player is not None and preview._player.poll() is not None:
+            preview._player = None
+            if not preview.is_active():
+                window["-PREVIEW-"].update("▶ Preview")
 
         if event == "-FILE-":
             handle_file_event(window, values, BASE_TITLE)
@@ -556,7 +666,57 @@ def main():
         # Выбор голоса (если надо, можно куда-то логировать)
         if event == "-VOICE-":
             current_voice = values["-VOICE-"]
-            _emit_info(window, f"Выбран голос: {current_voice}")
+            _emit_info(window, f"Voice selected: {current_voice}")
+
+        if event == "-PREVIEW-":
+            if preview.is_active():
+                preview.stop()
+                window["-PREVIEW-"].update("▶ Preview")
+                _emit_info(window, "Preview stopped")
+                continue
+
+            selected_display = values.get("-VOICE-", "")
+            selected_voice_id = voice_id_by_display.get(selected_display, selected_display)
+            if not selected_voice_id:
+                msg = "Не выбран голос для preview"
+                window["-VOICE_ERROR-"].update(msg)
+                _emit_info(window, f"Preview error: {msg}")
+                continue
+
+            preview_text = ((cfg.tts.preview_text if cfg is not None else "Это тестовое воспроизведение выбранного голоса.") or "").strip()
+            if not preview_text:
+                msg = "preview_text пустой в конфигурации"
+                window["-VOICE_ERROR-"].update(msg)
+                _emit_info(window, f"Preview error: {msg}")
+                continue
+
+            window["-VOICE_ERROR-"].update("")
+            window["-PREVIEW-"].update("⏹ Stop")
+            _emit_info(window, f"Preview started: voice={selected_voice_id}")
+            preview.start_preview(
+                model_name=(cfg.tts.model_name if cfg is not None else "tts_models/multilingual/multi-dataset/xtts_v2"),
+                voice_id=selected_voice_id,
+                preview_text=preview_text,
+                use_gpu=bool(values.get("-GPU-", cfg.usegpu if cfg is not None else True)),
+                window=window,
+            )
+
+        if event == "-PREVIEW_READY-":
+            payload = values["-PREVIEW_READY-"] or {}
+            if payload.get("ok"):
+                try:
+                    preview.play_file(payload["file"])
+                except Exception as ex:
+                    msg = f"Ошибка воспроизведения preview: {ex}"
+                    window["-VOICE_ERROR-"].update(msg)
+                    _emit_info(window, f"Preview error: {msg}")
+                    window["-PREVIEW-"].update("▶ Preview")
+            else:
+                msg = payload.get("error", "Unknown preview error")
+                window["-VOICE_ERROR-"].update(msg)
+                _emit_info(window, f"Preview error: {msg}")
+                window["-PREVIEW-"].update("▶ Preview")
+
 
         if event == "-MOVE_TO_DIR-":
             persist_move_to_dir(values.get("-MOVE_TO_DIR-", "").strip())
@@ -581,6 +741,7 @@ def main():
             current_steps = show_steps_modal(window, current_steps)
             window["-STEPS_SUMMARY-"].update(steps_summary(current_steps))
 
+    preview.stop()
     window.close()
 
 

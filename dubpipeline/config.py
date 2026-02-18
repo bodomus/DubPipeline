@@ -183,6 +183,7 @@ class TranslateConfig:
 class TtsConfig:
     model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
     voice: str = ""
+    preview_text: str = "Это тестовое воспроизведение выбранного голоса."
     sample_rate: int = 22_050
 
     speaker_wav: str = ""  # optional reference wav for voice cloning
@@ -358,6 +359,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TTS_FAST_LATENTS": "tts.fast_latents",
         "DUBPIPELINE_TTS_TRY_SINGLE_CALL": "tts.try_single_call",
         "DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS": "tts.try_single_call_max_chars",
+        "DUBPIPELINE_TTS_PREVIEW_TEXT": "tts.preview_text",
         # WhisperX word merge
         "DUBPIPELINE_WORD_MERGE_MAX_SEG_DUR": "whisperx.word_merge.max_seg_dur",
         "DUBPIPELINE_WORD_MERGE_MAX_SEG_CHARS": "whisperx.word_merge.max_seg_chars",
