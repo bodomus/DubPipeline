@@ -4,6 +4,7 @@ import json
 import re
 from time import perf_counter
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence
 
 import torch
@@ -33,6 +34,12 @@ _TTS_CACHE: dict[tuple[str, str], TTS] = {}
 # Speaker latents cache for XTTS when using speaker_wav (reference voice audio).
 # Key: (speaker_wav_path, device) -> (gpt_cond_latent, speaker_embedding, sample_rate)
 _SPK_LATENTS_CACHE: dict[tuple[str, str], tuple[object, object, int]] = {}
+
+
+@dataclass(frozen=True)
+class VoiceInfo:
+    id: str
+    display_name: str
 
 
 def _truthy(v: object) -> bool:
@@ -273,6 +280,30 @@ def get_voices(cfg: Optional[PipelineConfig] = None) -> Sequence[str] | None:
 
     tts = _load_tts(str(model_name), device)
     return getattr(tts, "speakers", None)
+
+
+def list_voices(cfg: Optional[PipelineConfig] = None) -> list[VoiceInfo]:
+    speakers = get_voices(cfg)
+    if not speakers:
+        return []
+    return [VoiceInfo(id=str(s), display_name=str(s)) for s in speakers]
+
+
+def synthesize_preview_text(
+    *,
+    model_name: str,
+    voice_id: str,
+    preview_text: str,
+    out_file: Path,
+    use_gpu: bool,
+) -> None:
+    if not preview_text.strip():
+        raise ValueError("preview_text is empty")
+
+    device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
+    tts = _load_tts(model_name, device)
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    tts.tts_to_file(text=preview_text, speaker=voice_id, language="ru", file_path=str(out_file))
 
 
 # Backward compat (если где-то уже зовётся старое имя)
