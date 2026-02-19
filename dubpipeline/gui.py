@@ -17,6 +17,23 @@ from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
 from dubpipeline.utils.logging import info, error
 
+
+def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_text: str, out_file: str, use_gpu: bool) -> None:
+    """Worker for TTS preview. Must be top-level for Windows multiprocessing (spawn/pickle)."""
+    try:
+        out_path = Path(out_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        synthesize_preview_text(
+            model_name=model_name,
+            voice_id=voice_id,
+            preview_text=preview_text,
+            out_file=out_path,
+            use_gpu=use_gpu,
+        )
+        q.put({"ok": True, "file": str(out_path)})
+    except Exception as ex:
+        q.put({"ok": False, "error": str(ex)})
+
 STEP_LABELS = {
     "extract_audio": "Извлечение аудио",
     "asr_whisperx": "ASR (WhisperX)",
@@ -143,23 +160,22 @@ class PreviewController:
         self.stop()
         out_dir = Path(tempfile.gettempdir()) / "dubpipeline_preview"
         out_file = out_dir / f"preview_{int(time.time() * 1000)}.wav"
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         queue: Queue = Queue()
 
-        def _worker_target(q: Queue) -> None:
-            try:
-                synthesize_preview_text(
-                    model_name=model_name,
-                    voice_id=voice_id,
-                    preview_text=preview_text,
-                    out_file=out_file,
-                    use_gpu=use_gpu,
-                )
-                q.put({"ok": True, "file": str(out_file)})
-            except Exception as ex:
-                q.put({"ok": False, "error": str(ex)})
-
-        proc = Process(target=_worker_target, args=(queue,), daemon=True)
+        proc = Process(
+            target=_preview_worker_target,
+            kwargs={
+                "q": queue,
+                "model_name": model_name,
+                "voice_id": voice_id,
+                "preview_text": preview_text,
+                "out_file": str(out_file),
+                "use_gpu": use_gpu,
+            },
+            daemon=True,
+        )
         proc.start()
 
         self._worker = proc
