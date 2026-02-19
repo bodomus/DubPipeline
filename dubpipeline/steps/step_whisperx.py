@@ -405,49 +405,55 @@ def run(cfg:PipelineConfig):
 
 
 def run_diarization_safe(audio, aligned_result, device="cpu"):
-    """
-    Пытаемся запустить диаризацию, если в whisperx есть нужные API.
-    Если не получается — аккуратно назначаем всем словам SPEAKER_00.
-    """
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    """Безопасно запускает diarization и всегда возвращает совместимый результат."""
+
+    def _env_enabled() -> bool:
+        raw = (os.environ.get("DUBPIPELINE_DIARIZATION") or "0").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    def _resolve_hf_token() -> str | None:
+        return os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+
+    def _fallback(reason: str):
+        warn(f"[WARN] Diarization fallback: {reason}\n")
+        for seg in aligned_result.get("segments", []):
+            seg["speaker"] = "SPEAKER_00"
+            for w in seg.get("words", []):
+                w["speaker"] = "SPEAKER_00"
+        return aligned_result
+
+    diarization_enabled = _env_enabled()
+    hf_token = _resolve_hf_token()
+    info(f"[DIAR] Enabled: {diarization_enabled}\n")
+    info(f"[DIAR] Token present: {bool(hf_token)}\n")
+
+    if not diarization_enabled:
+        return _fallback("disabled by DUBPIPELINE_DIARIZATION")
+
+    if not hf_token:
+        return _fallback("HF_TOKEN/HUGGINGFACE_TOKEN not provided")
+
+    if not hasattr(whisperx, "DiarizationPipeline"):
+        return _fallback("whisperx.DiarizationPipeline is not available")
 
     try:
-        # Новый API (GitHub-версия): DiarizationPipeline
-        if hasattr(whisperx, "DiarizationPipeline"):
-            step("Running diarization via DiarizationPipeline...\n")
-            diarize_model = whisperx.DiarizationPipeline(
-                device=device,
-                use_auth_token=hf_token
-            )
+        step("[STEP] Running diarization via DiarizationPipeline...\n")
+        diarize_model = whisperx.DiarizationPipeline(
+            device=device,
+            use_auth_token=hf_token,
+        )
+
+        try:
             diarize_segments = diarize_model(audio)
-            result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
-            return result
+        except TypeError:
+            audio_path = str(getattr(audio, "path", audio))
+            diarize_segments = diarize_model(audio_path)
 
-        # Возможный старый API (на всякий случай, если он есть в вашей версии)
-        if hasattr(whisperx, "load_diarization_model"):
-            step("[STEP] Running diarization via load_diarization_model...\n")
-            diarize_model = whisperx.load_diarization_model(
-                device=device,
-                use_auth_token=hf_token
-            )
-            diarize_segments = diarize_model(audio)
-            result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
-            return result
-
-        warn("[WARN] В установленной версии whisperx нет DiarizationPipeline/load_diarization_model.\n")
-        warn("[WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.\n")
-
-    except Exception as e:
-        error(f"[WARN] Diarization failed: {e}\n")
-        error("[WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.\n")
-
-    # --- Fallback: один спикер для всего аудио ---
-    for seg in aligned_result.get("segments", []):
-        seg["speaker"] = "SPEAKER_00"
-        for w in seg.get("words", []):
-            w["speaker"] = "SPEAKER_00"
-
-    return aligned_result
+        result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
+        info("[DIAR] Diarization completed successfully.\n")
+        return result
+    except Exception as ex:
+        return _fallback(f"diarization failed: {type(ex).__name__}: {ex}")
 
 # 3. Сохраняем в SRT (без диаризации — пока)
 def format_timestamp(seconds: float) -> str:
@@ -459,4 +465,3 @@ def format_timestamp(seconds: float) -> str:
     secs = total_seconds % 60
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
-
