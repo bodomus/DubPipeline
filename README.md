@@ -153,3 +153,34 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 - `translate` → `03_translate`
 - `tts` → `04_tts+align`
 - `merge` → `05_merge`
+
+## Diarization
+
+DubPipeline поддерживает **опциональную** диаризацию спикеров через `whisperx.DiarizationPipeline`.
+
+- По умолчанию диаризация выключена (`DUBPIPELINE_DIARIZATION=0`).
+- Для включения требуется Hugging Face токен с доступом к gated-моделям diarization.
+- Токен читается в таком порядке:
+  1. `HF_TOKEN`
+  2. `HUGGINGFACE_TOKEN`
+- Если токен отсутствует или diarization падает (401/403, gated model, network, import и т.д.), пайплайн **не падает** и автоматически уходит в fallback (`SPEAKER_00`).
+
+### Как получить HF токен
+
+1. Откройте https://huggingface.co/settings/tokens
+2. Создайте Access Token (обычно достаточно `read`).
+3. В аккаунте Hugging Face примите условия gated-моделей, используемых whisperx diarization.
+
+### PowerShell пример
+
+```powershell
+$env:HF_TOKEN="hf_xxxxx"
+$env:DUBPIPELINE_DIARIZATION="1"
+python -m dubpipeline.cli run .\video.pipeline.yaml
+```
+
+### Отключение диаризации
+
+```powershell
+$env:DUBPIPELINE_DIARIZATION="0"
+```
