@@ -211,6 +211,24 @@ class PreviewController:
         threading.Thread(target=_wait_playback, daemon=True).start()
 
 
+
+
+class MainWindowState:
+    def __init__(self, window) -> None:
+        self.window = window
+        self.background_track_path: str | None = None
+
+    def on_select_background_audio(self) -> None:
+        selected = sg.popup_get_file(
+            "Select background audio",
+            file_types=(("Audio Files", "*.wav;*.mp3;*.aac;*.m4a;*.flac"),),
+            no_window=False,
+        )
+        if selected:
+            self.background_track_path = selected
+            self.window["-BACKGROUND_AUDIO-"].update(selected)
+
+
 def run_pipeline(args_list, window):
     """
     args_list, например: ["run", "D:/Projects/DubPipeline/out/myproj.pipeline.yaml"]
@@ -536,6 +554,10 @@ def main():
          sg.Input(key="-IN-", expand_x=True, enable_events=True),
          sg.FileBrowse("...", key="-BROWSE_FILE-", file_types=(("Видео файлы", "*.mp4;*.mkv;*.mov;*.avi"),))],
 
+        [sg.Text("Background audio (optional):"),
+         sg.Input(key="-BACKGROUND_AUDIO-", expand_x=True),
+         sg.Button("Browse...", key="-BROWSE_BACKGROUND_AUDIO-")],
+
         [sg.Text("Папка с видео:"),
          sg.Input(key="-IN_DIR-", expand_x=True, enable_events=True, disabled=True),
          sg.FolderBrowse("...", key="-BROWSE_DIR-", target="-IN_DIR-", disabled=True)],
@@ -606,6 +628,7 @@ def main():
         )],
 
         [sg.Button("Старт", key="-START-"),
+         sg.Button("Reset", key="-RESET-"),
          sg.Button("Выход", key="-EXIT-"),
          sg.Text("Статус: idle", key="-STATUS-")],
     ]
@@ -619,6 +642,7 @@ def main():
 
     BASE_TITLE = "DubPipeline GUI"
     preview = PreviewController()
+    state = MainWindowState(window)
 
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
@@ -626,6 +650,8 @@ def main():
     window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
     window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/output")
     window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
+    state.background_track_path = None
+    window["-BACKGROUND_AUDIO-"].update("")
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
     running = False
@@ -737,10 +763,26 @@ def main():
         if event == "-MOVE_TO_DIR-":
             persist_move_to_dir(values.get("-MOVE_TO_DIR-", "").strip())
 
+        if event == "-RESET-":
+            state.background_track_path = None
+            window["-BACKGROUND_AUDIO-"].update("")
+
+        if event == "-BROWSE_BACKGROUND_AUDIO-":
+            state.on_select_background_audio()
+
+        if event == "-BACKGROUND_AUDIO-":
+            typed = values.get("-BACKGROUND_AUDIO-", "").strip()
+            state.background_track_path = typed or None
+
         if event == "-START-":
             if running:
                 sg.popup("Процесс уже запущен, дождитесь окончания.", title="Инфо")
                 continue
+            if state.background_track_path:
+                if not os.path.exists(state.background_track_path):
+                    sg.popup_error("Background audio file not found.")
+                    continue
+            values["-BACKGROUND_AUDIO-"] = state.background_track_path or ""
             run_count = handle_start_event(values, current_steps, video_exts, window)
             if run_count:
                 last_run_count = run_count

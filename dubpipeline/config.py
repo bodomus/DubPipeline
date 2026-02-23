@@ -226,6 +226,8 @@ class PipelineConfig:
     delete_srt: bool = True
     rebuild: bool = False
     cleanup: bool = False
+    external_voice_track: str | None = None
+    background_track: str | None = None
 
     languages: LanguagesConfig = field(default_factory=LanguagesConfig)
     steps: StepsConfig = field(default_factory=StepsConfig)
@@ -263,6 +265,8 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "delete_srt": True,
     "rebuild": False,
     "cleanup": False,
+    "external_voice_track": None,
+    "background_track": None,
     "languages": asdict(LanguagesConfig()),
     "steps": asdict(StepsConfig()),
     "paths": {
@@ -601,6 +605,8 @@ def load_pipeline_config_ex(
         delete_srt=bool(merged.get("delete_srt", merged.get("deleteSRT", True))),
         rebuild=bool(merged.get("rebuild", False)),
         cleanup=bool(merged.get("cleanup", False)),
+        external_voice_track=merged.get("external_voice_track"),
+        background_track=merged.get("background_track"),
         languages=languages,
         steps=steps,
         paths=paths_cfg,
@@ -652,6 +658,8 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg.setdefault("paths", {})
     cfg["paths"]["out_dir"] = out_dir
     cfg["paths"]["input_video"] = input_video
+    cfg["external_voice_track"] = values.get("-EXTERNAL_VOICE_TRACK-") or None
+    cfg["background_track"] = values.get("-BACKGROUND_AUDIO-") or None
 
     # voice
     cfg.setdefault("tts", {})

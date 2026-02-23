@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
+from dubpipeline.context import PipelineContext, PipelineFlags, PipelinePaths
+from dubpipeline.steps.step_audio_mix import AudioMixStep
 from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
@@ -77,6 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-temp", action="store_true", help="Удалять temp/work файлы по завершении.")
     parser.add_argument("--keep-temp", action="store_true", help="Не удалять temp/work файлы по завершении.")
     parser.add_argument("--plan", action="store_true", help="Dry-run: показать план и завершить без выполнения.")
+    parser.add_argument("--external-voice-track", default=None, metavar="PATH", help="Внешний голос для ASR (WAV/аудио).")
+    parser.add_argument("--background-track", default=None, metavar="PATH", help="Фоновая аудиодорожка для финального микса.")
     return parser
 
 
@@ -152,6 +156,18 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         if not in_dir_path.is_dir():
             parser.error(f"--in-dir должен указывать на существующую директорию: '{in_dir_path}'")
         cli_set.append(f"paths.input_video={in_dir_path.resolve()}")
+
+    if args.external_voice_track is not None:
+        ext_voice_path = Path(args.external_voice_track).expanduser()
+        if not ext_voice_path.exists() or not ext_voice_path.is_file():
+            parser.error(f"--external-voice-track должен указывать существующий файл: '{ext_voice_path}'")
+        cli_set.append(f"external_voice_track={ext_voice_path.resolve()}")
+
+    if args.background_track is not None:
+        bg_path = Path(args.background_track).expanduser()
+        if not bg_path.exists() or not bg_path.is_file():
+            parser.error(f"--background-track должен указывать существующий файл: '{bg_path}'")
+        cli_set.append(f"background_track={bg_path.resolve()}")
 
     if args.steps is not None:
         parsed_steps = _parse_steps_arg(args.steps, parser)
@@ -306,6 +322,20 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
     from .steps import step_extract_audio
 
     Const.bind(cfg)
+    out_dir = Path(cfg.paths.out_dir)
+    ctx = PipelineContext(
+        paths=PipelinePaths(
+            out_dir=str(out_dir),
+            voice_input_wav=str(out_dir / "voice_input.wav"),
+            background_wav=str(out_dir / "background.wav"),
+            translated_voice_wav=str(out_dir / "translated_voice.wav"),
+            mixed_wav=str(out_dir / "mixed.wav"),
+        ),
+        flags=PipelineFlags(),
+    )
+    ctx.flags.external_voice_mode = cfg.external_voice_track is not None
+    ctx.flags.background_mode = cfg.background_track is not None
+
     device = cfg.device
     compute_type = cfg.compute_type
 
@@ -325,6 +355,7 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
             rebuild_cleanup_safe(cfg)
 
     def tts_and_align(c) -> None:
+        c.paths.audio_wav = Path(ctx.paths.translated_voice_wav)
         with timed_block("04a_tts", log=info):
             step_tts.run(c)
         with timed_block("04b_align", log=info):
@@ -342,8 +373,35 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         if not enabled:
             info(f"[dubpipeline] Шаг {name} отключён в конфиге.")
             continue
+
+        if name == "01_extract_audio" and ctx.flags.external_voice_mode:
+            info("[dubpipeline] Шаг 01_extract_audio пропущен: external_voice_mode=true")
+            continue
+
+        if name == "02_asr_whisperx" and ctx.flags.external_voice_mode:
+            src = Path(cfg.external_voice_track)
+            dst = Path(ctx.paths.voice_input_wav)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            cfg.paths.audio_wav = dst
+
+        if name == "05_merge":
+            if ctx.flags.mix_executed:
+                cfg.paths.audio_wav = Path(ctx.paths.mixed_wav)
+            else:
+                cfg.paths.audio_wav = Path(ctx.paths.translated_voice_wav)
+
         with timed_block(name, log=info):
             fn(cfg)
+
+        if name == "04_tts+align" and ctx.flags.background_mode:
+            mix_step = AudioMixStep()
+            mix_step.run(
+                translated_voice=Path(ctx.paths.translated_voice_wav),
+                background_track=Path(cfg.background_track),
+                ctx=ctx,
+            )
+            ctx.flags.mix_executed = True
 
     if cfg.delete_srt:
         with timed_block("99_delete_srt", log=info):
@@ -361,6 +419,9 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("99_cleanup_garbage", log=info):
             cleanup_garbage(cfg, pipeline_path)
 
+    info(f"[pipeline] ExternalVoiceMode={ctx.flags.external_voice_mode}")
+    info(f"[pipeline] BackgroundMode={ctx.flags.background_mode}")
+    info(f"[pipeline] MixExecuted={ctx.flags.mix_executed}")
 
 def main() -> None:
     parser = build_parser()

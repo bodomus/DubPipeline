@@ -43,6 +43,8 @@ class CliTests(unittest.TestCase):
             "--delete-temp",
             "--keep-temp",
             "--plan",
+            "--external-voice-track",
+            "--background-track",
         ]:
             self.assertIn(flag, help_text)
 
@@ -232,6 +234,27 @@ paths:
 
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
         self.assertEqual(cfg.output.audio_update_mode, "overwrite_reorder")
+
+    def test_save_pipeline_yaml_persists_background_track(self):
+        root = self._case_dir("cli_background_track")
+        pipeline_file = root / "sample.pipeline.yaml"
+        bg = root / "bg.wav"
+        bg.write_text("x", encoding="utf-8")
+        values = {
+            "-PROJECT-": "sample",
+            "-OUT-": "out",
+            "-IN-": "sample.mp4",
+            "-MODES-": "Add",
+            "-GPU-": True,
+            "-REBUILD-": False,
+            "-SRT-": False,
+            "-CLEANUP-": False,
+            "-BACKGROUND_AUDIO-": str(bg),
+        }
+
+        save_pipeline_yaml(values, pipeline_file)
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+        self.assertEqual(str(cfg.background_track), str(bg))
 
 
 if __name__ == "__main__":
