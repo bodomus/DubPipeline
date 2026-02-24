@@ -77,6 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-temp", action="store_true", help="Удалять temp/work файлы по завершении.")
     parser.add_argument("--keep-temp", action="store_true", help="Не удалять temp/work файлы по завершении.")
     parser.add_argument("--plan", action="store_true", help="Dry-run: показать план и завершить без выполнения.")
+    parser.add_argument("--merge-mode", default=None, metavar="MODE", help="Режим merge (например: hq_ducking).")
+    parser.add_argument("--no-loudnorm", action="store_true", help="Отключить loudnorm в режиме hq_ducking.")
+    parser.add_argument(
+        "--force-video-copy",
+        action="store_true",
+        help="Принудительно включить stream copy для видео (hq_ducking использует это по умолчанию).",
+    )
     return parser
 
 
@@ -137,6 +144,12 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         cli_set.append("cleanup=true")
     if args.keep_temp:
         cli_set.append("cleanup=false")
+    if args.merge_mode is not None:
+        cli_set.append(f"audio_merge.mode={args.merge_mode}")
+    if args.no_loudnorm:
+        cli_set.append("audio_merge.loudness.enabled=false")
+    if args.force_video_copy:
+        cli_set.append("audio_merge.video.copy_stream=true")
 
     in_file = getattr(args, "in_file", None)
     in_dir = getattr(args, "in_dir", None)

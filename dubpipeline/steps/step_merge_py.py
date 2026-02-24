@@ -8,6 +8,7 @@ from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
 from dubpipeline.utils.atomic_replace import AtomicFileReplacer
+from dubpipeline.steps import step_merge_hq
 
 def mux_replace(
     video: Path,
@@ -144,6 +145,11 @@ def resolve_mux_mode(mode: str) -> MuxMode:
 
 
 def run(cfg:PipelineConfig) -> None:
+    if getattr(cfg, "audio_merge", None) and cfg.audio_merge.mode == "hq_ducking":
+        info("[merge] using hq_ducking mode")
+        step_merge_hq.run(cfg)
+        return
+
     Const.bind(cfg)
     video = cfg.paths.input_video
     audio = cfg.paths.audio_wav
@@ -189,4 +195,3 @@ def run(cfg:PipelineConfig) -> None:
     except Exception:
         replacer.cleanup_temp(temp_out)
         raise
-

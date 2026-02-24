@@ -217,6 +217,49 @@ class OutputConfig:
 
 
 @dataclass
+class AudioMergeDuckingConfig:
+    enabled: bool = True
+    amount_db: float = 10.0
+    threshold_db: float = -30.0
+    attack_ms: int = 10
+    release_ms: int = 250
+    ratio: float = 6.0
+    knee_db: float = 6.0
+
+
+@dataclass
+class AudioMergeLoudnessConfig:
+    enabled: bool = True
+    target_i: float = -16.0
+    true_peak: float = -1.5
+
+
+@dataclass
+class AudioMergeVideoConfig:
+    copy_stream: bool = True
+    preserve_fps: bool = True
+
+
+@dataclass
+class AudioMergeAudioOutConfig:
+    codec: str = "aac"
+    sample_rate: str = "auto"
+    bitrate_kbps: int = 160
+
+
+@dataclass
+class AudioMergeConfig:
+    mode: str = "classic"
+    original_track: str = "auto"
+    tts_gain_db: float = 0.0
+    original_gain_db: float = 0.0
+    ducking: AudioMergeDuckingConfig = field(default_factory=AudioMergeDuckingConfig)
+    loudness: AudioMergeLoudnessConfig = field(default_factory=AudioMergeLoudnessConfig)
+    video: AudioMergeVideoConfig = field(default_factory=AudioMergeVideoConfig)
+    audio_out: AudioMergeAudioOutConfig = field(default_factory=AudioMergeAudioOutConfig)
+
+
+@dataclass
 class PipelineConfig:
     # general
     project_name: str
@@ -237,6 +280,7 @@ class PipelineConfig:
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    audio_merge: AudioMergeConfig = field(default_factory=AudioMergeConfig)
 
 
     @property
@@ -276,6 +320,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "translate": asdict(TranslateConfig()),
     "tts": asdict(TtsConfig()),
     "mux": asdict(MuxConfig()),
+    "audio_merge": asdict(AudioMergeConfig()),
     "output": {
         "move_to_dir": "",
         "update_existing_file": False,
@@ -579,6 +624,17 @@ def load_pipeline_config_ex(
     translate = TranslateConfig(**(merged.get("translate") or {}))
     tts = TtsConfig(**(merged.get("tts") or {}))
     mux = MuxConfig(**(merged.get("mux") or {}))
+    audio_merge_raw = merged.get("audio_merge") or {}
+    audio_merge = AudioMergeConfig(
+        mode=str(audio_merge_raw.get("mode", AudioMergeConfig().mode)),
+        original_track=str(audio_merge_raw.get("original_track", AudioMergeConfig().original_track)),
+        tts_gain_db=float(audio_merge_raw.get("tts_gain_db", AudioMergeConfig().tts_gain_db)),
+        original_gain_db=float(audio_merge_raw.get("original_gain_db", AudioMergeConfig().original_gain_db)),
+        ducking=AudioMergeDuckingConfig(**(audio_merge_raw.get("ducking") or {})),
+        loudness=AudioMergeLoudnessConfig(**(audio_merge_raw.get("loudness") or {})),
+        video=AudioMergeVideoConfig(**(audio_merge_raw.get("video") or {})),
+        audio_out=AudioMergeAudioOutConfig(**(audio_merge_raw.get("audio_out") or {})),
+    )
     output_raw = merged.get("output") or {}
     output = OutputConfig(**output_raw)
     mode_raw = output_raw.get("audio_update_mode", merged.get("mode"))
@@ -610,6 +666,7 @@ def load_pipeline_config_ex(
         tts=tts,
         mux=mux,
         output=output,
+        audio_merge=audio_merge,
     )
 
     info("[dubpipeline] Config loaded (defaults -> yaml -> env -> cli).\n")

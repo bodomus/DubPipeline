@@ -43,6 +43,9 @@ class CliTests(unittest.TestCase):
             "--delete-temp",
             "--keep-temp",
             "--plan",
+            "--merge-mode",
+            "--no-loudnorm",
+            "--force-video-copy",
         ]:
             self.assertIn(flag, help_text)
 
@@ -168,6 +171,23 @@ paths:
                 ["run", "video.pipeline.yaml", "--in-file", str(source)]
             )
             self.assertEqual(_detect_input_source(args_cli), "CLI")
+
+    def test_merge_mode_overrides(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "video.pipeline.yaml",
+                "--merge-mode",
+                "hq_ducking",
+                "--no-loudnorm",
+                "--force-video-copy",
+            ]
+        )
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("audio_merge.mode=hq_ducking", cli_set)
+        self.assertIn("audio_merge.loudness.enabled=false", cli_set)
+        self.assertIn("audio_merge.video.copy_stream=true", cli_set)
 
     def test_cli_overrides_yaml_out(self):
         with tempfile.TemporaryDirectory() as tmp:

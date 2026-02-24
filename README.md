@@ -153,3 +153,47 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 - `translate` → `03_translate`
 - `tts` → `04_tts+align`
 - `merge` → `05_merge`
+
+## HQ Ducking Merge (`audio_merge.mode=hq_ducking`)
+
+- В режиме `hq_ducking` видеопоток **никогда не перекодируется**: используется `-map 0:v:0 -c:v copy`.
+- Любые признаки `4K -> 1080p`, `30 -> 29.97`, смены видеокодека (например AV1 -> H.264) в этом режиме считаются **багом**.
+- Обрабатывается только аудио:
+  - оригинальная дорожка из входного видео,
+  - TTS WAV,
+  - sidechain ducking,
+  - опциональный loudnorm.
+
+Пример YAML:
+
+```yaml
+audio_merge:
+  mode: hq_ducking
+  original_track: auto
+  tts_gain_db: 0.0
+  original_gain_db: 0.0
+  ducking:
+    enabled: true
+    amount_db: 10.0
+    threshold_db: -30.0
+    attack_ms: 10
+    release_ms: 250
+    ratio: 6.0
+    knee_db: 6.0
+  loudness:
+    enabled: true
+    target_i: -16.0
+    true_peak: -1.5
+  video:
+    copy_stream: true
+    preserve_fps: true
+  audio_out:
+    codec: aac
+    sample_rate: auto
+    bitrate_kbps: 160
+```
+
+CLI overrides:
+- `--merge-mode hq_ducking`
+- `--no-loudnorm`
+- `--force-video-copy`
