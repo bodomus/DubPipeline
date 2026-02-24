@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Callable
@@ -76,6 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rebuild", action="store_true", help="Принудительно пересоздать артефакты шагов.")
     parser.add_argument("--delete-temp", action="store_true", help="Удалять temp/work файлы по завершении.")
     parser.add_argument("--keep-temp", action="store_true", help="Не удалять temp/work файлы по завершении.")
+    parser.add_argument("--merge-mode", default=None, metavar="MODE", help="Режим финального мержа (например, hq_ducking).")
+    parser.add_argument("--tts-gain-db", type=float, default=None, metavar="DB", help="Усиление TTS дорожки в dB.")
+    parser.add_argument("--original-gain-db", type=float, default=None, metavar="DB", help="Усиление оригинальной дорожки в dB.")
+    parser.add_argument("--ducking-amount-db", type=float, default=None, metavar="DB", help="Глубина ducking в dB.")
+    parser.add_argument("--ducking-threshold-db", type=float, default=None, metavar="DB", help="Порог sidechain compressor в dB.")
+    parser.add_argument("--ducking-attack-ms", type=int, default=None, metavar="MS", help="Attack sidechain compressor в ms.")
+    parser.add_argument("--ducking-release-ms", type=int, default=None, metavar="MS", help="Release sidechain compressor в ms.")
+    parser.add_argument("--no-loudnorm", action="store_true", help="Отключить loudnorm в режиме hq_ducking.")
     parser.add_argument("--plan", action="store_true", help="Dry-run: показать план и завершить без выполнения.")
     return parser
 
@@ -135,8 +144,27 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         cli_set.append("rebuild=true")
     if args.delete_temp:
         cli_set.append("cleanup=true")
+        cli_set.append("keep_temp=false")
     if args.keep_temp:
         cli_set.append("cleanup=false")
+        cli_set.append("keep_temp=true")
+
+    if args.merge_mode is not None:
+        cli_set.append(f"audio_merge.mode={args.merge_mode}")
+    if args.tts_gain_db is not None:
+        cli_set.append(f"audio_merge.tts_gain_db={args.tts_gain_db}")
+    if args.original_gain_db is not None:
+        cli_set.append(f"audio_merge.original_gain_db={args.original_gain_db}")
+    if args.ducking_amount_db is not None:
+        cli_set.append(f"audio_merge.ducking.amount_db={args.ducking_amount_db}")
+    if args.ducking_threshold_db is not None:
+        cli_set.append(f"audio_merge.ducking.threshold_db={args.ducking_threshold_db}")
+    if args.ducking_attack_ms is not None:
+        cli_set.append(f"audio_merge.ducking.attack_ms={args.ducking_attack_ms}")
+    if args.ducking_release_ms is not None:
+        cli_set.append(f"audio_merge.ducking.release_ms={args.ducking_release_ms}")
+    if args.no_loudnorm:
+        cli_set.append("audio_merge.loudness.enabled=false")
 
     in_file = getattr(args, "in_file", None)
     in_dir = getattr(args, "in_dir", None)
@@ -205,6 +233,7 @@ def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mod
     print(f"  cleanup_temp: {cfg.cleanup}")
     print(f"  update_existing_file: {cfg.output.update_existing_file}")
     print(f"  audio_update_mode: {cfg.output.audio_update_mode}")
+    print(f"  audio_merge_mode: {cfg.audio_merge.mode}")
     print("  steps:")
     for row in _format_steps(cfg):
         print(row)
@@ -367,6 +396,7 @@ def main() -> None:
     args = parser.parse_args()
 
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
+    os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if args.keep_temp else "0"
     cli_set = _build_cli_set(args, parser)
 
     cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set, create_dirs=not args.plan)
