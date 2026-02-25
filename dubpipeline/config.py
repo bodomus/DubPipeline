@@ -217,6 +217,34 @@ class OutputConfig:
 
 
 @dataclass
+class AudioMergeDuckingConfig:
+    enabled: bool = True
+    amount_db: float = 10.0
+    threshold_db: float = -30.0
+    attack_ms: int = 10
+    release_ms: int = 250
+    ratio: float = 6.0
+    knee_db: float = 6.0
+
+
+@dataclass
+class AudioMergeLoudnessConfig:
+    enabled: bool = True
+    target_i: float = -16.0
+    true_peak: float = -1.5
+
+
+@dataclass
+class AudioMergeConfig:
+    mode: str = ""
+    original_track: str = "auto"
+    tts_gain_db: float = 0.0
+    original_gain_db: float = 0.0
+    ducking: AudioMergeDuckingConfig = field(default_factory=AudioMergeDuckingConfig)
+    loudness: AudioMergeLoudnessConfig = field(default_factory=AudioMergeLoudnessConfig)
+
+
+@dataclass
 class PipelineConfig:
     # general
     project_name: str
@@ -226,6 +254,7 @@ class PipelineConfig:
     delete_srt: bool = True
     rebuild: bool = False
     cleanup: bool = False
+    keep_temp: bool = False
 
     languages: LanguagesConfig = field(default_factory=LanguagesConfig)
     steps: StepsConfig = field(default_factory=StepsConfig)
@@ -237,6 +266,7 @@ class PipelineConfig:
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    audio_merge: AudioMergeConfig = field(default_factory=AudioMergeConfig)
 
 
     @property
@@ -263,6 +293,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "delete_srt": True,
     "rebuild": False,
     "cleanup": False,
+    "keep_temp": False,
     "languages": asdict(LanguagesConfig()),
     "steps": asdict(StepsConfig()),
     "paths": {
@@ -280,6 +311,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
         "move_to_dir": "",
         "update_existing_file": False,
     },
+    "audio_merge": asdict(AudioMergeConfig()),
 }
 
 
@@ -350,6 +382,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "TRN": "translate",
         "TTS": "tts",
         "MUX": "mux",
+        "AMR": "audio_merge",
         "STP": "steps",
     }
 
@@ -584,6 +617,22 @@ def load_pipeline_config_ex(
     mode_raw = output_raw.get("audio_update_mode", merged.get("mode"))
     output.audio_update_mode = normalize_audio_update_mode(mode_raw)
 
+    audio_merge_raw = dict(merged.get("audio_merge") or {})
+    if "bg_gain_db" in audio_merge_raw and "original_gain_db" not in audio_merge_raw:
+        audio_merge_raw["original_gain_db"] = audio_merge_raw.get("bg_gain_db")
+    ducking_raw = dict(audio_merge_raw.get("ducking") or {})
+    loudness_raw = dict(audio_merge_raw.get("loudness") or {})
+    ducking_defaults = asdict(AudioMergeDuckingConfig())
+    loudness_defaults = asdict(AudioMergeLoudnessConfig())
+    audio_merge = AudioMergeConfig(
+        mode=str(audio_merge_raw.get("mode", AudioMergeConfig().mode)),
+        original_track=str(audio_merge_raw.get("original_track", AudioMergeConfig().original_track)),
+        tts_gain_db=float(audio_merge_raw.get("tts_gain_db", AudioMergeConfig().tts_gain_db)),
+        original_gain_db=float(audio_merge_raw.get("original_gain_db", AudioMergeConfig().original_gain_db)),
+        ducking=AudioMergeDuckingConfig(**(ducking_defaults | {k: v for k, v in ducking_raw.items() if k in ducking_defaults})),
+        loudness=AudioMergeLoudnessConfig(**(loudness_defaults | {k: v for k, v in loudness_raw.items() if k in loudness_defaults})),
+    )
+
     # inherit language defaults into mux if user didn't override
     if not mux.orig_lang:
         mux.orig_lang = "eng"
@@ -601,6 +650,7 @@ def load_pipeline_config_ex(
         delete_srt=bool(merged.get("delete_srt", merged.get("deleteSRT", True))),
         rebuild=bool(merged.get("rebuild", False)),
         cleanup=bool(merged.get("cleanup", False)),
+        keep_temp=bool(merged.get("keep_temp", False)),
         languages=languages,
         steps=steps,
         paths=paths_cfg,
@@ -610,6 +660,7 @@ def load_pipeline_config_ex(
         tts=tts,
         mux=mux,
         output=output,
+        audio_merge=audio_merge,
     )
 
     info("[dubpipeline] Config loaded (defaults -> yaml -> env -> cli).\n")

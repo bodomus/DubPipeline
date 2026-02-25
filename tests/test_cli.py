@@ -42,6 +42,14 @@ class CliTests(unittest.TestCase):
             "--rebuild",
             "--delete-temp",
             "--keep-temp",
+            "--merge-mode",
+            "--tts-gain-db",
+            "--original-gain-db",
+            "--ducking-amount-db",
+            "--ducking-threshold-db",
+            "--ducking-attack-ms",
+            "--ducking-release-ms",
+            "--no-loudnorm",
             "--plan",
         ]:
             self.assertIn(flag, help_text)
@@ -192,6 +200,40 @@ paths:
                 create_dirs=False,
             )
             self.assertTrue(str(cfg.paths.out_dir).endswith("out_from_cli"))
+
+    def test_cli_merge_overrides_are_translated_to_set(self):
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "run",
+                "video.pipeline.yaml",
+                "--merge-mode",
+                "hq_ducking",
+                "--tts-gain-db",
+                "1.5",
+                "--original-gain-db",
+                "-2",
+                "--ducking-amount-db",
+                "12",
+                "--ducking-threshold-db",
+                "-28",
+                "--ducking-attack-ms",
+                "8",
+                "--ducking-release-ms",
+                "320",
+                "--no-loudnorm",
+            ]
+        )
+
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("audio_merge.mode=hq_ducking", cli_set)
+        self.assertIn("audio_merge.tts_gain_db=1.5", cli_set)
+        self.assertIn("audio_merge.original_gain_db=-2.0", cli_set)
+        self.assertIn("audio_merge.ducking.amount_db=12.0", cli_set)
+        self.assertIn("audio_merge.ducking.threshold_db=-28.0", cli_set)
+        self.assertIn("audio_merge.ducking.attack_ms=8", cli_set)
+        self.assertIn("audio_merge.ducking.release_ms=320", cli_set)
+        self.assertIn("audio_merge.loudness.enabled=false", cli_set)
 
     def test_save_pipeline_yaml_persists_update_existing_settings(self):
         root = self._case_dir("cli_save_update_existing")
