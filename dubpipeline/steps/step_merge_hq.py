@@ -383,3 +383,89 @@ def merge_hq_config_from_pipeline(cfg: PipelineConfig) -> tuple[MergeHQConfig, s
 
     selector = parse_original_track_selector(getattr(audio_merge_cfg, "original_track", "auto"))
     return hq_cfg, selector
+
+
+def render_hq_mix_audio(
+    *,
+    input_video: Path,
+    tts_wav: Path,
+    out_audio: Path,
+    work_dir: Path,
+    cfg: MergeHQConfig,
+    original_audio_stream_selector: str = "auto",
+) -> Path:
+    """Render HQ ducked mixdown to an audio file. Returns path to out_audio."""
+    validate_merge_hq_config(cfg)
+
+    if not input_video.exists():
+        raise FileNotFoundError(f"Input video not found: {input_video}")
+    if not tts_wav.exists():
+        raise FileNotFoundError(f"TTS wav not found: {tts_wav}")
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    out_audio.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_out = out_audio.with_name(f"{out_audio.name}.tmp")
+    temp_out.unlink(missing_ok=True)
+
+    info("[merge] mode: hq_ducking (mixdown)")
+
+    streams = probe_audio_streams(input_video)
+    selected = select_original_audio_stream(streams, original_audio_stream_selector)
+    info(
+        "[merge] selected original audio stream: "
+        f"selector={original_audio_stream_selector}, "
+        f"audio_index={selected.audio_index}, stream_index={selected.stream_index}, "
+        f"lang={selected.language or 'n/a'}, codec={selected.codec_name or 'n/a'}"
+    )
+
+    original_spec = f"0:a:{selected.audio_index}"
+    filtergraph = build_filtergraph(cfg=cfg, original_audio_spec=original_spec)
+    debug(f"[merge] filtergraph: {filtergraph}")
+
+    output_container = None
+    suffix = out_audio.suffix.lower()
+    if suffix in {".m4a", ".mp4"}:
+        output_container = "mp4"
+    elif suffix == ".aac":
+        output_container = "adts"
+    elif suffix == ".wav":
+        output_container = "wav"
+
+    cmd = [
+        _ffmpeg_bin(),
+        "-y",
+        "-i",
+        str(input_video),
+        "-i",
+        str(tts_wav),
+        "-filter_complex",
+        filtergraph,
+        "-map",
+        "[outa]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+    ]
+    if output_container:
+        cmd.extend(["-f", output_container])
+    cmd.append(str(temp_out))
+
+    info(f"[merge] tmp audio path: {temp_out}")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            error(proc.stderr)
+            raise RuntimeError(f"HQ mixdown failed with code {proc.returncode}")
+
+        if not temp_out.exists():
+            raise RuntimeError(f"Expected temp output is missing: {temp_out}")
+
+        os.replace(temp_out, out_audio)
+        info(f"[merge] mixdown ready: {out_audio}")
+        return out_audio
+    except Exception:
+        if not _keep_temp_enabled():
+            temp_out.unlink(missing_ok=True)
+        raise

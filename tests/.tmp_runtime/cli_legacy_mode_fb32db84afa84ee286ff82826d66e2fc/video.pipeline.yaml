@@ -1,0 +1,6 @@
+project_name: sample
+mode: Русская дорожка первой
+paths:
+  workdir: .
+  out_dir: out
+  input_video: source.mp4

@@ -8,7 +8,7 @@ from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
-from dubpipeline.steps.step_merge_hq import merge_hq_config_from_pipeline, merge_hq_ducking
+from dubpipeline.steps.step_merge_hq import merge_hq_config_from_pipeline, render_hq_mix_audio
 from dubpipeline.utils.atomic_replace import AtomicFileReplacer
 
 def mux_replace(
@@ -193,16 +193,31 @@ def run(cfg:PipelineConfig) -> None:
         os.environ["DUBPIPELINE_FFMPEG_BIN"] = ffmpeg_bin
         os.environ["DUBPIPELINE_FFPROBE_BIN"] = ffprobe_bin
         os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if bool(getattr(cfg, "keep_temp", False)) else "0"
+        mix_path = Path(cfg.paths.out_dir) / f"{effective_output.stem}.hq_mix.m4a"
         try:
-            merge_hq_ducking(
+            render_hq_mix_audio(
                 input_video=video,
                 tts_wav=audio,
-                out_video=effective_output,
+                out_audio=mix_path,
                 work_dir=Path(cfg.paths.out_dir),
                 cfg=hq_cfg,
                 original_audio_stream_selector=selector,
             )
+            mux_smart(
+                video,
+                mix_path,
+                effective_output,
+                mode=mux_mode,
+                ffmpeg=ffmpeg_bin,
+                ffprobe=ffprobe_bin,
+                orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
+                orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
+                ru_lang=getattr(getattr(cfg, "mux", None), "ru_lang", "rus"),
+                ru_title=getattr(getattr(cfg, "mux", None), "ru_track_title", "Russian_Dub"),
+            )
         finally:
+            if not bool(getattr(cfg, "keep_temp", False)):
+                mix_path.unlink(missing_ok=True)
             if previous_ffmpeg is None:
                 os.environ.pop("DUBPIPELINE_FFMPEG_BIN", None)
             else:
