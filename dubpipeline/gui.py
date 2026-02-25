@@ -16,6 +16,7 @@ from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_up
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
 from dubpipeline.utils.logging import info, error
+from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
 
 
 def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_text: str, out_file: str, use_gpu: bool) -> None:
@@ -342,10 +343,10 @@ def persist_move_to_dir(path: str) -> None:
 
 
 def set_source_mode(window, is_dir: bool) -> None:
-    window["-IN-"].update(disabled=is_dir)
-    window["-BROWSE_FILE-"].update(disabled=is_dir)
-    window["-IN_DIR-"].update(disabled=not is_dir)
-    window["-BROWSE_DIR-"].update(disabled=not is_dir)
+    for key, disabled in source_mode_disabled_map(is_dir=is_dir).items():
+        window[key].update(disabled=disabled)
+
+
 
 
 def sync_update_existing_controls(window, values) -> None:
@@ -387,7 +388,6 @@ def handle_file_event(window, values, base_title: str) -> None:
     except Exception:
         pass
 
-
 def _prepare_folder_run(values, current_steps, video_exts, window):
     in_dir = values.get("-IN_DIR-", "").strip()
     if not in_dir or not os.path.isdir(in_dir):
@@ -395,10 +395,10 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
         return None, 0
 
     in_dir_p = Path(in_dir)
-    files = sorted(
-        [p for p in in_dir_p.iterdir() if p.is_file() and p.suffix.lower() in video_exts],
-        key=lambda p: p.name.lower(),
-    )
+    recursive = bool(values.get("-RECURSIVE-", False))
+    files = enumerate_input_files(in_dir_p, recursive=recursive, allowed_exts=video_exts)
+    _emit_info(window, f"Directory scan: recursive={recursive}")
+    _emit_info(window, f"Found {len(files)} files")
     if not files:
         sg.popup_error("В выбранной папке нет видео-файлов (*.mp4, *.mkv, *.mov, *.avi).")
         return None, 0
@@ -425,7 +425,8 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
             shutil.copy2(TEMPLATE_PATH, pipeline_file)
 
         pipeline_path = save_pipeline_yaml(v, pipeline_file)
-        run_items.append((p.name, ["run", str(pipeline_path)]))
+        display_name = str(p.relative_to(in_dir_p))
+        run_items.append((display_name, ["run", str(pipeline_path)]))
 
     return run_items, len(run_items)
 
@@ -539,6 +540,13 @@ def main():
         [sg.Text("Папка с видео:"),
          sg.Input(key="-IN_DIR-", expand_x=True, enable_events=True, disabled=True),
          sg.FolderBrowse("...", key="-BROWSE_DIR-", target="-IN_DIR-", disabled=True)],
+
+        [sg.Checkbox(
+            "Рекурсивно (включая подпапки)",
+            key="-RECURSIVE-",
+            default=False,
+            disabled=True,
+        )],
 
         [sg.Text("Голос TTS:"),
          sg.Combo(
