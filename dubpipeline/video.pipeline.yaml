@@ -1,0 +1,59 @@
+project_name: 1. Simple Opaque Water
+input_video: J:\Projects\!!!AI\DubPipeline\tests\data\1. Simple Opaque Water.mp4
+mode: Добавление
+usegpu: true
+deleteSRT: true
+rebuild: false
+languages:
+  src: en
+  tgt: ru
+paths:
+  workdir: .
+  out_dir: tests\output
+  input_video: J:\Projects\!!!AI\DubPipeline\tests\data\1. Simple Opaque Water.mp4
+  audio_wav: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.wav
+  segments_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.json
+  segments_ru_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.ru.json
+  srt_file_en: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.srt
+  tts_segments_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments
+  tts_segments_align_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments_aligned
+  final_video: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.ru.muxed.mp4
+steps:
+  extract_audio: true
+  asr_whisperx: true
+  translate: true
+  tts: true
+  merge: true
+output:
+  move_to_dir: ''
+tts:
+  voice: Luis Moray
+  sample_rate: 22050
+ffmpeg:
+  audio_codec: pcm_s16le
+  audio_bitrate: 128k
+  sample_rate: 16000
+  channels: 1
+audio:
+  mix:
+    enabled: true
+    voice_gain: 1.0
+    noise_gain: 0.7
+    normalize: false
+audio_merge:
+  mode: hq_ducking
+  original_track: auto
+  tts_gain_db: 0.0
+  original_gain_db: 0.0
+  ducking:
+    enabled: true
+    amount_db: 10.0
+    threshold_db: -30.0
+    attack_ms: 10
+    release_ms: 250
+    ratio: 6.0
+    knee_db: 6.0
+  loudness:
+    enabled: true
+    target_i: -16.0
+    true_peak: -1.5
