@@ -1,0 +1,119 @@
+project_name: sample
+mode: Overwrite+Reorder
+usegpu: true
+delete_srt: false
+rebuild: false
+cleanup: false
+keep_temp: false
+languages:
+  src: en
+  tgt: ru
+steps:
+  extract_audio: true
+  asr_whisperx: true
+  translate: true
+  tts: true
+  align: true
+  merge: true
+paths:
+  workdir: .
+  out_dir: out
+  input_video: sample.mp4
+  templates:
+    audio_wav: '{out_dir}/{project_name}.wav'
+    segments_json: '{out_dir}/{project_name}.segments.json'
+    segments_ru_json: '{out_dir}/{project_name}.segments.ru.json'
+    srt_en: '{out_dir}/{project_name}.srt'
+    tts_segments_dir: '{out_dir}/segments/tts_ru_segments'
+    tts_segments_aligned_dir: '{out_dir}/segments/tts_ru_segments_aligned'
+    final_video: '{out_dir}/{project_name}.ru.muxed.mp4'
+  audio_wav: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.wav
+  segments_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.json
+  segments_ru_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.ru.json
+  srt_file_en: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.srt
+  tts_segments_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments
+  tts_segments_align_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments_aligned
+  final_video: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.ru.muxed.mp4
+ffmpeg:
+  bin: ffmpeg
+  sample_rate: 16000
+  channels: 1
+  audio_codec: pcm_s16le
+  audio_bitrate: 128k
+whisperx:
+  model_name: large-v3
+  batch_size: 1
+  max_gap_between_words: 0.8
+  word_merge:
+    max_seg_dur: 20.0
+    max_seg_chars: 350
+    min_seg_dur: 1.0
+    min_seg_chars: 25
+    merge_max_gap: 0.35
+    max_seg_dur_post: 12.0
+    allow_cross_speaker: true
+  release_vram: true
+translate:
+  backend: auto
+  hf_model: Helsinki-NLP/opus-mt-en-ru
+  batch_size: 64
+  max_new_tokens: 256
+  cache_db: ''
+  release_vram: true
+tts:
+  model_name: tts_models/multilingual/multi-dataset/xtts_v2
+  voice: Luis Moray
+  preview_text: Это тестовое воспроизведение выбранного голоса.
+  sample_rate: 22050
+  speaker_wav: ''
+  warn_limit_chars_ru: 182
+  max_ru_chars: 170
+  gap_ms: 80
+  breaks:
+  - '. '
+  - '! '
+  - '? '
+  - '; '
+  - ': '
+  - ' — '
+  - ', '
+  fast_latents: true
+  try_single_call: true
+  try_single_call_max_chars: 1200
+mux:
+  ffmpeg_bin: ffmpeg
+  audio_codec: aac
+  audio_bitrate: 192k
+  orig_track_title: Original
+  ru_track_title: Russian_Dub
+  orig_lang: eng
+  ru_lang: rus
+output:
+  move_to_dir: ''
+  update_existing_file: true
+  audio_update_mode: overwrite_reorder
+audio_merge:
+  mode: hq_ducking
+  original_track: auto
+  tts_gain_db: 0.0
+  original_gain_db: 0.0
+  ducking:
+    enabled: true
+    amount_db: 10.0
+    threshold_db: -30.0
+    attack_ms: 10
+    release_ms: 250
+    ratio: 6.0
+    knee_db: 6.0
+  loudness:
+    enabled: true
+    target_i: -16.0
+    true_peak: -1.5
+input_video: J:\Projects\!!!AI\DubPipeline\tests\data\1. Simple Opaque Water.mp4
+deleteSRT: true
+audio:
+  mix:
+    enabled: true
+    voice_gain: 1.0
+    noise_gain: 0.7
+    normalize: false

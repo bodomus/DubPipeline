@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
+from dubpipeline.steps.step_merge_hq import merge_hq_config_from_pipeline, render_hq_mix_audio
 from dubpipeline.utils.atomic_replace import AtomicFileReplacer
 
 def mux_replace(
@@ -151,6 +153,7 @@ def run(cfg:PipelineConfig) -> None:
     update_existing = bool(getattr(output_cfg, "update_existing_file", False))
     configured_mode = getattr(output_cfg, "audio_update_mode", "") or cfg.mode
     out_path = cfg.paths.final_video
+    audio_merge_mode = str(getattr(getattr(cfg, "audio_merge", None), "mode", "") or "").strip().lower()
 #
     #(venv) λ python .\tools\mux_ru_audio.py ^
   #--video in\lecture_sample.mp4 ^
@@ -174,6 +177,60 @@ def run(cfg:PipelineConfig) -> None:
     print(f"Output: {effective_output}\n")
     print(f"Mode: {configured_mode}\n")
     info(f"[merge] audio update mode: {configured_mode}")
+
+    if audio_merge_mode == "hq_ducking":
+        hq_cfg, selector = merge_hq_config_from_pipeline(cfg)
+        info(f"[merge] selected merge mode: {audio_merge_mode}")
+
+        ffmpeg_bin = str(getattr(getattr(cfg, "ffmpeg", None), "bin", "ffmpeg"))
+        ffprobe_bin = "ffprobe"
+        if "ffmpeg" in ffmpeg_bin.lower():
+            ffprobe_bin = ffmpeg_bin.replace("ffmpeg", "ffprobe")
+
+        previous_ffmpeg = os.getenv("DUBPIPELINE_FFMPEG_BIN")
+        previous_ffprobe = os.getenv("DUBPIPELINE_FFPROBE_BIN")
+        previous_keep_temp = os.getenv("DUBPIPELINE_KEEP_TEMP")
+        os.environ["DUBPIPELINE_FFMPEG_BIN"] = ffmpeg_bin
+        os.environ["DUBPIPELINE_FFPROBE_BIN"] = ffprobe_bin
+        os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if bool(getattr(cfg, "keep_temp", False)) else "0"
+        mix_path = Path(cfg.paths.out_dir) / f"{effective_output.stem}.hq_mix.m4a"
+        try:
+            render_hq_mix_audio(
+                input_video=video,
+                tts_wav=audio,
+                out_audio=mix_path,
+                work_dir=Path(cfg.paths.out_dir),
+                cfg=hq_cfg,
+                original_audio_stream_selector=selector,
+            )
+            mux_smart(
+                video,
+                mix_path,
+                effective_output,
+                mode=mux_mode,
+                ffmpeg=ffmpeg_bin,
+                ffprobe=ffprobe_bin,
+                orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
+                orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
+                ru_lang=getattr(getattr(cfg, "mux", None), "ru_lang", "rus"),
+                ru_title=getattr(getattr(cfg, "mux", None), "ru_track_title", "Russian_Dub"),
+            )
+        finally:
+            if not bool(getattr(cfg, "keep_temp", False)):
+                mix_path.unlink(missing_ok=True)
+            if previous_ffmpeg is None:
+                os.environ.pop("DUBPIPELINE_FFMPEG_BIN", None)
+            else:
+                os.environ["DUBPIPELINE_FFMPEG_BIN"] = previous_ffmpeg
+            if previous_ffprobe is None:
+                os.environ.pop("DUBPIPELINE_FFPROBE_BIN", None)
+            else:
+                os.environ["DUBPIPELINE_FFPROBE_BIN"] = previous_ffprobe
+            if previous_keep_temp is None:
+                os.environ.pop("DUBPIPELINE_KEEP_TEMP", None)
+            else:
+                os.environ["DUBPIPELINE_KEEP_TEMP"] = previous_keep_temp
+        return
 
     if not update_existing:
         mux_smart(video, audio, out_path, mode=mux_mode)
