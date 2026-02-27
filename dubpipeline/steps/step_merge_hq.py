@@ -190,8 +190,8 @@ def build_filtergraph(
     threshold_linear = max(0.000976563, min(1.0, 10 ** (cfg.ducking.threshold_db / 20.0)))
 
     parts: list[str] = [
-        f"[{original_audio_spec}]volume={cfg.original_gain_db:.3f}dB[orig]",
-        f"[1:a]volume={cfg.tts_gain_db:.3f}dB[tts]",
+        f"[{original_audio_spec}]aresample=48000,volume={cfg.original_gain_db:.3f}dB[orig]",
+        f"[1:a]aresample=48000,volume={cfg.tts_gain_db:.3f}dB[tts]",
     ]
 
     if cfg.ducking.enabled:
@@ -261,6 +261,8 @@ def build_ffmpeg_command(
         "aac",
         "-b:a",
         "192k",
+        "-ar",
+        "48000",
     ]
     if output_container in {"mp4", "mov"}:
         cmd.extend(["-movflags", "+faststart"])
@@ -405,7 +407,7 @@ def render_hq_mix_audio(
     work_dir.mkdir(parents=True, exist_ok=True)
     out_audio.parent.mkdir(parents=True, exist_ok=True)
 
-    temp_out = out_audio.with_name(f"{out_audio.name}.tmp")
+    temp_out = out_audio.with_name(f"{out_audio.stem}.tmp{out_audio.suffix}")
     temp_out.unlink(missing_ok=True)
 
     info("[merge] mode: hq_ducking (mixdown)")
@@ -447,7 +449,11 @@ def render_hq_mix_audio(
         "aac",
         "-b:a",
         "192k",
+        "-ar",
+        "48000",
     ]
+    if output_container in {"mp4", "mov"}:
+        cmd.extend(["-movflags", "+faststart"])
     if output_container:
         cmd.extend(["-f", output_container])
     cmd.append(str(temp_out))

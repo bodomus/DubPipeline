@@ -114,6 +114,7 @@ audio_merge:
     def test_filtergraph_generation(self):
         cfg = _base_hq_cfg()
         graph = build_filtergraph(cfg=cfg, original_audio_spec="0:a:0")
+        self.assertIn("aresample=48000", graph)
         self.assertIn("sidechaincompress=", graph)
         self.assertIn("amix=inputs=2:normalize=0", graph)
         self.assertIn("loudnorm=I=-16.000:TP=-1.500", graph)
@@ -136,6 +137,8 @@ audio_merge:
         self.assertIn("-filter_complex", cmd)
         self.assertIn("-map", cmd)
         self.assertIn("[outa]", cmd)
+        self.assertIn("-ar", cmd)
+        self.assertIn("48000", cmd)
         self.assertEqual(cmd[-1], "out.mp4.tmp")
 
 

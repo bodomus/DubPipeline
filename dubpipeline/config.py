@@ -204,7 +204,7 @@ class MuxConfig:
     audio_codec: str = "aac"
     audio_bitrate: str = "192k"
     orig_track_title: str = "Original"
-    ru_track_title: str = "Russian_Dub"
+    ru_track_title: str = "Russian (DubPipeline)"
     orig_lang: str = "eng"
     ru_lang: str = "rus"
 
