@@ -94,6 +94,7 @@ class PathsConfig:
     workdir: Path = Path(".")
     out_dir: Path = Path("out")
     input_video: Path = Path()
+    input_text: Path | None = None
 
     # derived/outputs
     audio_wav: Path = Path()
@@ -103,6 +104,12 @@ class PathsConfig:
     tts_segments_dir: Path = Path()
     tts_segments_aligned_dir: Path = Path()
     final_video: Path = Path()
+    final_audio: Path | None = None
+    voice_input_wav: Path = Path()
+    translated_voice_wav: Path = Path()
+    background_wav: Path = Path()
+    mixed_wav: Path = Path()
+
 
     # templates (keep for debugging / printing)
     templates: PathsTemplatesConfig = field(default_factory=PathsTemplatesConfig)
@@ -189,6 +196,7 @@ class TtsConfig:
     speaker_wav: str = ""  # optional reference wav for voice cloning
     warn_limit_chars_ru: int = 182
     max_ru_chars: int = 170
+    text_max_chars: int = 400
 
     gap_ms: int = 80
     breaks: list[str] = field(default_factory=lambda: [". ", "! ", "? ", "; ", ": ", " — ", ", "])
@@ -300,6 +308,8 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
         "workdir": ".",
         "out_dir": "out",
         "input_video": "{project_name}.mp4",
+        "input_text": None,
+        "final_audio": None,
         "templates": asdict(PathsTemplatesConfig()),
     },
     "ffmpeg": asdict(FfmpegConfig()),
@@ -547,6 +557,8 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
         tts_segments_dir=_p(merged_tmpl["tts_segments_dir"]),
         tts_segments_aligned_dir=_p(merged_tmpl["tts_segments_aligned_dir"]),
         final_video=_p(merged_tmpl["final_video"]),
+        input_text=Path(paths.get("input_text")).resolve() if paths.get("input_text") else None,
+        final_audio=_p(paths.get("final_audio")) if paths.get("final_audio") else None,
         templates=PathsTemplatesConfig(**default_tmpl | {k: str(v) for k, v in merged_tmpl.items()}),
     )
 
