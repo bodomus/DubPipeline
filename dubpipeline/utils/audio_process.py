@@ -1,10 +1,11 @@
 import json
 import subprocess
 from enum import Enum
-from logging import info, error
 from pathlib import Path
 
 from dubpipeline.utils.quote_pretty_run import norm_arg
+from logging import info, error
+
 
 class MuxMode(str, Enum):
     REPLACE = "replace"        # заменить оригинальную аудио
@@ -89,22 +90,17 @@ def mux_smart(
     orig_lang: str = "eng",
     orig_title: str = "Original",
     ru_lang: str = "rus",
-    ru_title: str = "Russian_Dub",
+    ru_title: str = "Russian (DubPipeline)",
     copy_subtitles: bool = True,
     set_default: bool = True,
 ) -> None:
-    """
-    Умный mux:
-    - умеет replace/add/rus_first
-    - старается НЕ перекодировать оригинальную аудио (copy), только русскую -> aac
-    - при несовместимости откатывается на aac для всех аудио
-    """
+    # Smart mux:
+    # - replace/add/rus_first
+    # - prefer copy for all audio, then fall back to re-encode if needed
     video_info = ffprobe_info(video, ffprobe=ffprobe)
     ru_info = ffprobe_info(ru_audio, ffprobe=ffprobe)
 
     a_streams = _audio_streams(video_info)
-    orig_a_count = len(a_streams)
-    orig_default_pos = _default_audio_pos(a_streams)
     video_duration = _media_duration_seconds(video_info)
     ru_duration = _media_duration_seconds(ru_info)
 
@@ -119,122 +115,105 @@ def mux_smart(
                 f"({video_duration:.3f}s). Omitting -shortest to keep full video."
             )
 
-    # -------- базовый cmd --------
     cmd = [
         ffmpeg,
         "-y",
         "-i", norm_arg(str(video)),
         "-i", norm_arg(str(ru_audio)),
-
-        # сохранить глобальные метаданные/главы
         "-map_metadata", "0",
         "-map_chapters", "0",
-
-        # видео (как у вас: первый видеопоток)
         "-map", "0:v:0",
     ]
 
-    # subtitles (опционально, безопасно: ?)
     if copy_subtitles:
         cmd += ["-map", "0:s?", "-c:s", "copy"]
 
-    # -------- маппинг аудио --------
-    # Важно: порядок -map определяет порядок дорожек в выходе.
+    mapped_orig_count = 0
     if mode == MuxMode.REPLACE:
-        # только русская
         cmd += ["-map", "1:a:0"]
         out_ru_idx = 0
         out_orig_start = None
-
+        mapped_orig_count = 0
     elif mode == MuxMode.ADD:
-        # сначала все оригинальные, потом русская
-        cmd += ["-map", "0:a?", "-map", "1:a:0"]
-        out_ru_idx = orig_a_count  # если orig_a_count=0 -> 0
+        cmd += ["-map", "0:a:0", "-map", "1:a:0"]
+        out_ru_idx = 1
         out_orig_start = 0
-
+        mapped_orig_count = 1
     elif mode == MuxMode.RUS_FIRST:
-        # сначала русская, потом все оригинальные
-        cmd += ["-map", "1:a:0", "-map", "0:a?"]
+        cmd += ["-map", "1:a:0", "-map", "0:a:0"]
         out_ru_idx = 0
-        out_orig_start = 1 if orig_a_count > 0 else None
-
+        out_orig_start = 1
+        mapped_orig_count = 1
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-    # -------- кодеки --------
     cmd += ["-c:v", "copy"]
     if use_shortest:
         cmd += ["-shortest"]
 
-    # “умно”: оригинал копируем, русскую кодируем в AAC
-    # (если это не получится — ниже сделаем fallback на aac для всех)
     cmd_best = cmd.copy()
     cmd_best += [
         "-c:a", "copy",
         f"-c:a:{out_ru_idx}", "aac",
     ]
 
-    # -------- disposition default --------
-    # Ставим default “по уму”:
-    # - replace/rus_first: русская default
-    # - add: сохраняем default оригинала (если был), иначе оставим 0-ю как default
     def add_dispositions(cmd_list: list[str], total_audio_out: int) -> None:
         if not set_default or total_audio_out <= 0:
             return
-
-        # сначала сбросим default у всех
         for i in range(total_audio_out):
             cmd_list += [f"-disposition:a:{i}", "0"]
-
         if mode in (MuxMode.REPLACE, MuxMode.RUS_FIRST):
             cmd_list += [f"-disposition:a:{out_ru_idx}", "default"]
-        else:  # ADD
-            if orig_a_count == 0:
-                cmd_list += [f"-disposition:a:{out_ru_idx}", "default"]
-            else:
-                # сохранить default оригинала, если найден
-                keep = orig_default_pos if orig_default_pos is not None else 0
-                cmd_list += [f"-disposition:a:{keep}", "default"]
+        else:
+            cmd_list += ["-disposition:a:0", "default"]
 
-    total_audio_out = 1 if mode == MuxMode.REPLACE else (orig_a_count + 1)
+    total_audio_out = 1 if mode == MuxMode.REPLACE else (mapped_orig_count + 1)
 
-    # -------- metadata дорожек --------
     def add_metadata(cmd_list: list[str]) -> None:
-        # русская
         cmd_list += [
             f"-metadata:s:a:{out_ru_idx}", f"language={ru_lang}",
             f"-metadata:s:a:{out_ru_idx}", f"title={ru_title}",
         ]
-
-        # оригинальные (если есть)
-        if orig_a_count > 0 and out_orig_start is not None:
-            for k in range(orig_a_count):
+        if mapped_orig_count > 0 and out_orig_start is not None:
+            for k in range(mapped_orig_count):
                 out_i = out_orig_start + k
-                # чтобы не было одинаковых title при множестве дорожек:
-                title = orig_title if orig_a_count == 1 else f"{orig_title} {k+1}"
+                title = orig_title if mapped_orig_count == 1 else f"{orig_title} {k+1}"
                 cmd_list += [
                     f"-metadata:s:a:{out_i}", f"language={orig_lang}",
                     f"-metadata:s:a:{out_i}", f"title={title}",
                 ]
 
-    # финализируем cmd_best
     add_dispositions(cmd_best, total_audio_out)
     add_metadata(cmd_best)
+    if out_path.suffix.lower() in {".mp4", ".mov", ".m4a"}:
+        cmd_best += ["-movflags", "+faststart"]
     cmd_best += [norm_arg(str(out_path))]
 
-    # -------- fallback (aac для всех аудио) --------
+    cmd_copy = cmd.copy()
+    cmd_copy += ["-c:a", "copy"]
+    add_dispositions(cmd_copy, total_audio_out)
+    add_metadata(cmd_copy)
+    if out_path.suffix.lower() in {".mp4", ".mov", ".m4a"}:
+        cmd_copy += ["-movflags", "+faststart"]
+    cmd_copy += [norm_arg(str(out_path))]
+
     cmd_fallback = cmd.copy()
     cmd_fallback += ["-c:a", "aac"]
     add_dispositions(cmd_fallback, total_audio_out)
     add_metadata(cmd_fallback)
+    if out_path.suffix.lower() in {".mp4", ".mov", ".m4a"}:
+        cmd_fallback += ["-movflags", "+faststart"]
     cmd_fallback += [norm_arg(str(out_path))]
 
-    # -------- запуск --------
     try:
-        run_ffmpeg(cmd_best)
+        run_ffmpeg(cmd_copy)
     except SystemExit:
-        # если copy оригинала невозможен (например, DTS в MP4) — перекодируем всё в AAC
-        run_ffmpeg(cmd_fallback)
+        try:
+            run_ffmpeg(cmd_best)
+        except Exception:
+            run_ffmpeg(cmd_fallback)
     except Exception:
-        # если copy оригинала невозможен (например, DTS в MP4) — перекодируем всё в AAC
-        run_ffmpeg(cmd_fallback)
+        try:
+            run_ffmpeg(cmd_best)
+        except Exception:
+            run_ffmpeg(cmd_fallback)
