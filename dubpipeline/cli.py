@@ -124,46 +124,60 @@ def _run_speak(args: argparse.Namespace) -> None:
 
     out_audio = Path(args.out_audio).expanduser().resolve()
     out_audio.parent.mkdir(parents=True, exist_ok=True)
+    # Speak mode writes temp artifacts next to output audio.
+    cfg.paths.out_dir = out_audio.parent
+    out_dir = Path(cfg.paths.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     segments_json = out_audio.with_suffix(".segments.json")
     segments_dir = out_audio.parent / f"{out_audio.stem}_segments"
+    out_segments_json = out_dir / "out.segments.json"
 
+    total_chars = sum(len(seg.get("text", "")) for seg in segments)
     info(f"[speak] segments={len(segments)}\n")
-    info(f"[speak] total_chars={sum(len(seg.get('text', '')) for seg in segments)}\n")
+    info(f"[speak] total_chars={total_chars}\n")
     info(f"[speak] out_audio={out_audio}\n")
 
     if not args.plan:
         save_segments_json(segments, segments_json)
+        save_segments_json(segments, out_segments_json)
     else:
+        print(f"[speak][plan] segments={len(segments)}")
+        print(f"[speak][plan] total_chars={total_chars}")
         print(f"[speak][plan] segments_json={segments_json}")
 
-    wavs = synthesize_segments_to_wavs(
-        segments,
-        cfg,
-        segments_dir,
-        voice=args.voice,
-        lang=args.lang,
-        speaker_wav=Path(args.speaker_wav) if args.speaker_wav else None,
-        device="cpu" if args.cpu else ("cuda" if args.usegpu else None),
-        plan=args.plan,
-    )
+    try:
+        wavs = synthesize_segments_to_wavs(
+            segments,
+            cfg,
+            segments_dir,
+            voice=args.voice,
+            lang=args.lang,
+            speaker_wav=Path(args.speaker_wav) if args.speaker_wav else None,
+            device="cpu" if args.cpu else ("cuda" if args.usegpu else None),
+            plan=args.plan,
+            show_progress=not args.plan,
+        )
 
-    if args.plan:
-        print("[speak][plan] planned wav artifacts:")
-        for wav in wavs:
-            print(f"  - {wav}")
-        return
+        if args.plan:
+            print("[speak][plan] planned wav artifacts:")
+            for wav in wavs:
+                print(f"  - {wav}")
+            return
 
-    concat_wavs(wavs, out_audio, gap_ms=int(cfg.tts.gap_ms), subtype="PCM_16")
-    with out_audio.open("rb") as f:
-        if f.read(4) != b"RIFF":
-            raise RuntimeError("Invalid WAV output header")
-    meta = {
-        "segments": len(segments),
-        "total_chars": sum(len(seg.get("text", "")) for seg in segments),
-        "out_audio": str(out_audio),
-        "segments_json": str(segments_json),
-    }
-    print(json.dumps(meta, ensure_ascii=False, indent=2))
+        concat_wavs(wavs, out_audio, gap_ms=int(cfg.tts.gap_ms), subtype="PCM_16")
+        with out_audio.open("rb") as f:
+            if f.read(4) != b"RIFF":
+                raise RuntimeError("Invalid WAV output header")
+        meta = {
+            "segments": len(segments),
+            "total_chars": sum(len(seg.get("text", "")) for seg in segments),
+            "out_audio": str(out_audio),
+            "segments_json": str(segments_json),
+        }
+        print(json.dumps(meta, ensure_ascii=False, indent=2))
+    finally:
+        if not args.plan:
+            out_segments_json.unlink(missing_ok=True)
 
 
 def _parse_steps_arg(raw_steps: str, parser: argparse.ArgumentParser) -> dict[str, bool]:

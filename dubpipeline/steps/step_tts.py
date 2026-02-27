@@ -82,6 +82,6 @@ def run(cfg: PipelineConfig) -> None:
         segments = json.load(f)
 
     segments = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
-    wavs = synthesize_segments_to_wavs(segments, cfg, out_dir)
+    wavs = synthesize_segments_to_wavs(segments, cfg, out_dir, show_progress=False)
     info(f"[DONE] Russian TTS segments generated in: {out_dir}\n")
     info(f"Summary: ok={len(wavs)}, failed=0, skipped={max(0, len(segments) - len(wavs))}\n")

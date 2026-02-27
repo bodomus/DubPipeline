@@ -173,6 +173,7 @@ def synthesize_segments_to_wavs(
     speaker_wav: Path | None = None,
     device: str | None = None,
     plan: bool = False,
+    show_progress: bool = True,
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     language = (lang or "ru").strip() or "ru"
@@ -189,6 +190,11 @@ def synthesize_segments_to_wavs(
     latents = _get_speaker_latents_cached(tts, speaker_wav_s, selected_device) if speaker_wav_s and cfg.tts.fast_latents else None
 
     built: list[Path] = []
+    progress = None
+    if show_progress and planned_paths:
+        from dubpipeline.utils.progress import SegmentProgress
+        progress = SegmentProgress(total=len(planned_paths))
+
     for index, seg in enumerate(segments):
         text = _segment_text(seg)
         if not text:
@@ -208,6 +214,8 @@ def synthesize_segments_to_wavs(
             else:
                 tts.tts_to_file(text=text, file_path=str(out_wav), language=language, speaker=default_speaker, split_sentences=True)
             built.append(out_wav)
+            if progress is not None:
+                progress.update(len(built))
             continue
 
         parts: list[Path] = []
@@ -223,5 +231,9 @@ def synthesize_segments_to_wavs(
         for part in parts:
             part.unlink(missing_ok=True)
         built.append(out_wav)
+        if progress is not None:
+            progress.update(len(built))
 
+    if progress is not None:
+        progress.finish()
     return built
