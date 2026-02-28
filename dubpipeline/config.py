@@ -59,12 +59,28 @@ _AUDIO_MODE_ALIASES: dict[str, str] = {
     "русская дорожка первой": AudioUpdateMode.OVERWRITE_REORDER.value,
 }
 
+_INPUT_MODE_ALIASES: dict[str, str] = {
+    "file": "file",
+    "single": "file",
+    "single_file": "file",
+    "dir": "dir",
+    "folder": "dir",
+    "directory": "dir",
+}
+
 
 def normalize_audio_update_mode(value: str | None) -> str:
     raw = (value or "").strip().lower()
     if not raw:
         return AudioUpdateMode.ADD.value
     return _AUDIO_MODE_ALIASES.get(raw, AudioUpdateMode.ADD.value)
+
+
+def normalize_input_mode(value: str | None) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return "file"
+    return _INPUT_MODE_ALIASES.get(raw, "file")
 
 
 @dataclass
@@ -288,6 +304,8 @@ class PipelineConfig:
 
 DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "project_name": "video_sample",
+    "input_mode": "file",
+    "input_path": "",
     "mode": "Добавление",
     "usegpu": True,
     "delete_srt": True,
@@ -501,8 +519,17 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
     if create_dirs:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    # input_video can be at root or in paths; prefer paths.input_video
-    input_video_s = paths.get("input_video") or raw.get("input_video") or "{project_name}.mp4"
+    legacy_input_dir = raw.get("input_dir")
+
+    # input_video can be at root/in paths; for new GUI schema also support input_path.
+    # Priority keeps backward compatibility with existing YAML.
+    input_video_s = (
+        raw.get("input_path")
+        or paths.get("input_video")
+        or raw.get("input_video")
+        or legacy_input_dir
+        or "{project_name}.mp4"
+    )
     variables = {
         "project_name": raw.get("project_name", ""),
         "project_dir": str(project_dir),
@@ -684,11 +711,23 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     project_name = values.get("-PROJECT-", "").strip() or cfg.get("project_name", "video_sample")
     out_dir = values.get("-OUT-", "").strip() or (cfg.get("paths", {}) or {}).get("out_dir", "out")
-    input_video = values.get("-IN-", "").strip() or (cfg.get("paths", {}) or {}).get("input_video", "{project_name}.mp4")
+    source_mode = "dir" if bool(values.get("-SRC_DIR-", False)) else "file"
+    if "-INPUT_MODE-" in values:
+        source_mode = normalize_input_mode(values.get("-INPUT_MODE-"))
+
+    input_path = values.get("-INPUT_PATH-", "").strip()
+    if not input_path and source_mode == "dir":
+        input_path = values.get("-IN_DIR-", "").strip()
+    if not input_path:
+        input_path = values.get("-IN-", "").strip()
+    if not input_path:
+        input_path = (cfg.get("paths", {}) or {}).get("input_video", "{project_name}.mp4")
 
     selected_mode = values.get("-MODES-", cfg.get("mode", "Добавление"))
 
     cfg["project_name"] = project_name
+    cfg["input_mode"] = source_mode
+    cfg["input_path"] = input_path
     cfg["mode"] = selected_mode
     cfg["usegpu"] = bool(values.get("-GPU-", True))
     cfg["rebuild"] = bool(values.get("-REBUILD-", False))
@@ -702,7 +741,10 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     cfg.setdefault("paths", {})
     cfg["paths"]["out_dir"] = out_dir
-    cfg["paths"]["input_video"] = input_video
+    cfg["paths"]["input_video"] = input_path
+    cfg["input_video"] = input_path
+    if source_mode == "dir":
+        cfg["input_dir"] = input_path
 
     # voice
     cfg.setdefault("tts", {})

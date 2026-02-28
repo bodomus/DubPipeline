@@ -257,6 +257,50 @@ paths:
         self.assertTrue(cfg.output.update_existing_file)
         self.assertEqual(cfg.output.audio_update_mode, "overwrite_reorder")
 
+    def test_save_pipeline_yaml_persists_unified_input_model(self):
+        root = self._case_dir("cli_save_input_model")
+        pipeline_file = root / "sample.pipeline.yaml"
+        values = {
+            "-PROJECT-": "sample",
+            "-OUT-": "out",
+            "-INPUT_MODE-": "dir",
+            "-INPUT_PATH-": "tests/data",
+            "-SRC_DIR-": True,
+            "-MODES-": "Add",
+            "-GPU-": True,
+            "-REBUILD-": False,
+            "-SRT-": False,
+            "-CLEANUP-": False,
+            "-MOVE_TO_DIR-": "",
+            "-UPDATE_EXISTING_FILE-": False,
+        }
+
+        save_pipeline_yaml(values, pipeline_file)
+        with pipeline_file.open("r", encoding="utf-8") as f:
+            raw = f.read()
+
+        self.assertIn("input_mode: dir", raw)
+        self.assertIn("input_path: tests/data", raw)
+        self.assertIn("input_video: tests/data", raw)
+
+    def test_load_config_uses_input_path_when_paths_input_video_is_missing(self):
+        root = self._case_dir("cli_load_input_path")
+        pipeline_file = root / "sample.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+input_mode: file
+input_path: from-input-path.mp4
+paths:
+  workdir: .
+  out_dir: out
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+        self.assertTrue(str(cfg.paths.input_video).endswith("from-input-path.mp4"))
+
     def test_legacy_mode_is_normalized_to_audio_update_mode(self):
         root = self._case_dir("cli_legacy_mode")
         pipeline_file = root / "video.pipeline.yaml"

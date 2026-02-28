@@ -17,6 +17,7 @@ from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
 from dubpipeline.utils.logging import info, error
 from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
+from dubpipeline.input_mode import resolve_saved_input_state, validate_input_path
 
 
 def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_text: str, out_file: str, use_gpu: bool) -> None:
@@ -347,6 +348,12 @@ def set_source_mode(window, is_dir: bool) -> None:
         window[key].update(disabled=disabled)
 
 
+def browse_input_path(*, is_dir_mode: bool, video_file_types):
+    if is_dir_mode:
+        return sg.popup_get_folder("Выберите папку с видео")
+    return sg.popup_get_file("Выберите видеофайл", file_types=video_file_types)
+
+
 
 
 def sync_update_existing_controls(window, values) -> None:
@@ -360,9 +367,9 @@ def sync_update_existing_controls(window, values) -> None:
 
     is_dir_mode = bool(values.get("-SRC_DIR-", False))
     if is_dir_mode:
-        candidate = values.get("-IN_DIR-", "").strip()
+        candidate = values.get("-INPUT_PATH-", "").strip()
     else:
-        in_path = values.get("-IN-", "").strip()
+        in_path = values.get("-INPUT_PATH-", "").strip()
         candidate = str(Path(in_path).expanduser().parent) if in_path else ""
 
     if candidate:
@@ -377,7 +384,7 @@ def handle_file_event(window, values, base_title: str) -> None:
     if total and idx:
         window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
         window["-PROJECT-"].update(name)
-        window["-IN-"].update(name)
+        window["-INPUT_PATH-"].update(name)
     else:
         window["-STATUS-"].update(f"Статус: running — {name}")
     try:
@@ -389,9 +396,10 @@ def handle_file_event(window, values, base_title: str) -> None:
         pass
 
 def _prepare_folder_run(values, current_steps, video_exts, window):
-    in_dir = values.get("-IN_DIR-", "").strip()
-    if not in_dir or not os.path.isdir(in_dir):
-        sg.popup_error("Укажите корректную папку с видео.")
+    in_dir = values.get("-INPUT_PATH-", "").strip()
+    ok, err = validate_input_path(in_dir, is_dir_mode=True)
+    if not ok:
+        sg.popup_error(err)
         return None, 0
 
     in_dir_p = Path(in_dir)
@@ -414,6 +422,8 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
         out_dir = str(Path(base_out) / project_name)
 
         v = dict(values)
+        v["-INPUT_PATH-"] = str(p)
+        v["-INPUT_MODE-"] = "file"
         v["-IN-"] = str(p)
         v["-PROJECT-"] = project_name
         v["-OUT-"] = out_dir
@@ -432,9 +442,10 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
 
 
 def _prepare_single_file_run(values, current_steps, window):
-    input_path = values["-IN-"].strip()
-    if not input_path or not os.path.isfile(input_path):
-        sg.popup_error("Укажите корректный путь к входному видео.")
+    input_path = values.get("-INPUT_PATH-", "").strip()
+    ok, err = validate_input_path(input_path, is_dir_mode=False)
+    if not ok:
+        sg.popup_error(err)
         return None, 0
 
     base_out = values["-OUT-"].strip()
@@ -448,6 +459,8 @@ def _prepare_single_file_run(values, current_steps, window):
     out_dir = str(Path(base_out) / project_name)
     values["-OUT-"] = out_dir
     values["-STEPS-"] = dict(current_steps)
+    values["-INPUT_MODE-"] = "file"
+    values["-IN-"] = input_path
 
     pipeline_file = Path(out_dir) / f"{project_name}.pipeline.yaml"
     pipeline_file.parent.mkdir(parents=True, exist_ok=True)
@@ -520,26 +533,27 @@ def main():
     current_voice = get_voice() if pipeline_path.exists() else ""
     current_steps = normalize_steps(BASE_CFG.get("steps"))
     base_output_cfg = BASE_CFG.get("output") or {}
+    base_paths_cfg = BASE_CFG.get("paths") or {}
+    default_input_mode, default_input_path = resolve_saved_input_state(BASE_CFG)
+    default_is_dir = default_input_mode == "dir"
     default_update_existing = bool(base_output_cfg.get("update_existing_file", False))
     default_mode_display = _mode_to_display(base_output_cfg.get("audio_update_mode", BASE_CFG.get("mode", "add")))
+    default_out_dir = str(base_paths_cfg.get("out_dir") or "")
 
     video_exts = {".mp4", ".mkv", ".mov", ".avi"}
+    video_file_types = (("Видео файлы", "*.mp4;*.mkv;*.mov;*.avi"),)
 
     layout = [
         [sg.Text("Источник:"),
-         sg.Radio("Один файл", "SRCMODE", key="-SRC_FILE-", default=True, enable_events=True),
-         sg.Radio("Папка", "SRCMODE", key="-SRC_DIR-", enable_events=True)],
+         sg.Radio("Один файл", "SRCMODE", key="-SRC_FILE-", default=not default_is_dir, enable_events=True),
+         sg.Radio("Папка", "SRCMODE", key="-SRC_DIR-", default=default_is_dir, enable_events=True)],
 
         [sg.Text("Project name:"),
          sg.Input(key="-PROJECT-", expand_x=True)],
 
-        [sg.Text("Входное видео:"),
-         sg.Input(key="-IN-", expand_x=True, enable_events=True),
-         sg.FileBrowse("...", key="-BROWSE_FILE-", file_types=(("Видео файлы", "*.mp4;*.mkv;*.mov;*.avi"),))],
-
-        [sg.Text("Папка с видео:"),
-         sg.Input(key="-IN_DIR-", expand_x=True, enable_events=True, disabled=True),
-         sg.FolderBrowse("...", key="-BROWSE_DIR-", target="-IN_DIR-", disabled=True)],
+        [sg.Text("Input path:"),
+         sg.Input(key="-INPUT_PATH-", expand_x=True, enable_events=True),
+         sg.Button("Browse...", key="-BROWSE_INPUT-")],
 
         [sg.Checkbox(
             "Рекурсивно (включая подпапки)",
@@ -630,20 +644,19 @@ def main():
 
     # на всякий случай ещё раз говорим, что лог должен тянуться
     window["-LOGBOX-"].expand(expand_x=True, expand_y=True)
-    window["-PROJECT-"].update("2")
-    window["-IN-"].update("J:/Projects/!!!AI/DubPipeline/tests/data/2.mp4")
-    window["-OUT-"].update("J:/Projects/!!!AI/DubPipeline/tests/output")
+    window["-PROJECT-"].update(str(BASE_CFG.get("project_name") or ""))
+    window["-INPUT_PATH-"].update(default_input_path)
+    window["-OUT-"].update(default_out_dir)
     window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
     running = False
     last_run_count = 0
-    set_source_mode(window, False)
+    set_source_mode(window, default_is_dir)
     sync_update_existing_controls(window, {
         "-UPDATE_EXISTING_FILE-": bool(window["-UPDATE_EXISTING_FILE-"].get()),
-        "-SRC_DIR-": False,
-        "-IN-": window["-IN-"].get(),
-        "-IN_DIR-": window["-IN_DIR-"].get(),
+        "-SRC_DIR-": default_is_dir,
+        "-INPUT_PATH-": window["-INPUT_PATH-"].get(),
     })
     if voices:
         _emit_info(window, f"Voices loaded: {len(voices)}")
@@ -674,15 +687,29 @@ def main():
             sync_update_existing_controls(window, values)
 
         # Автозаполнение Project name по имени файла
-        if event == "-IN-" and values.get("-SRC_FILE-", True):
-            path_str = values["-IN-"].strip()
+        if event == "-INPUT_PATH-" and values.get("-SRC_FILE-", True):
+            path_str = values["-INPUT_PATH-"].strip()
             if path_str:
                 p = Path(path_str)
                 window["-PROJECT-"].update(p.stem)
             sync_update_existing_controls(window, values)
 
-        if event == "-IN_DIR-":
+        if event == "-INPUT_PATH-" and values.get("-SRC_DIR-", False):
             sync_update_existing_controls(window, values)
+
+        if event == "-BROWSE_INPUT-":
+            selected_path = browse_input_path(
+                is_dir_mode=bool(values.get("-SRC_DIR-", False)),
+                video_file_types=video_file_types,
+            )
+            if selected_path:
+                window["-INPUT_PATH-"].update(selected_path)
+                if values.get("-SRC_FILE-", True):
+                    window["-PROJECT-"].update(Path(selected_path).stem)
+                sync_update_existing_controls(window, {
+                    **values,
+                    "-INPUT_PATH-": selected_path,
+                })
 
         if event == "-UPDATE_EXISTING_FILE-":
             sync_update_existing_controls(window, values)

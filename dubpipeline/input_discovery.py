@@ -14,9 +14,7 @@ def enumerate_input_files(dir_path: str | Path, *, recursive: bool, allowed_exts
 
 def source_mode_disabled_map(*, is_dir: bool) -> dict[str, bool]:
     return {
-        "-IN-": is_dir,
-        "-BROWSE_FILE-": is_dir,
-        "-IN_DIR-": not is_dir,
-        "-BROWSE_DIR-": not is_dir,
+        "-INPUT_PATH-": False,
+        "-BROWSE_INPUT-": False,
         "-RECURSIVE-": not is_dir,
     }
