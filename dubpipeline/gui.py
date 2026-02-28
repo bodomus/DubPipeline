@@ -383,11 +383,11 @@ def handle_file_event(window, values, base_title: str) -> None:
     total = data.get("total", 0)
     name = data.get("name", "")
     if total and idx:
-        window["-STATUS-"].update(f"Статус: running ({idx}/{total}) — {name}")
+        window["-STATUS-"].update(f"Status: running ({idx}/{total}) - {name}")
         window["-PROJECT-"].update(name)
         window["-INPUT_PATH-"].update(name)
     else:
-        window["-STATUS-"].update(f"Статус: running — {name}")
+        window["-STATUS-"].update(f"Status: running - {name}")
     try:
         if total and idx:
             window.TKroot.title(f"{base_title} — {idx}/{total}: {name}")
@@ -479,7 +479,7 @@ def handle_start_event(values, current_steps, video_exts, window):
         if not run_items:
             return 0
         window["-LOGBOX-"].update("")
-        window["-STATUS-"].update(f"Статус: running ({run_count} files)")
+        window["-STATUS-"].update(f"Status: running ({run_count} files)")
         threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
         return run_count
 
@@ -487,7 +487,7 @@ def handle_start_event(values, current_steps, video_exts, window):
     if not run_items:
         return 0
     window["-LOGBOX-"].update("")
-    window["-STATUS-"].update("Статус: running")
+    window["-STATUS-"].update("Status: running")
     threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
     return run_count
 
@@ -510,9 +510,9 @@ def handle_done_event(window, values, base_title: str, last_run_count: int) -> N
 
     status = "ok" if exit_code == 0 else f"error (code {exit_code})"
     if last_run_count > 1 and exit_code == 0:
-        window["-STATUS-"].update(f"Статус: {status} ({last_run_count} files)")
+        window["-STATUS-"].update(f"Status: {status} ({last_run_count} files)")
     else:
-        window["-STATUS-"].update(f"Статус: {status}")
+        window["-STATUS-"].update(f"Status: {status}")
 
 
 def main():
@@ -630,7 +630,7 @@ def main():
 
         [sg.Button("Старт", key="-START-"),
          sg.Button("Выход", key="-EXIT-"),
-         sg.Text("Статус: idle", key="-STATUS-")],
+         sg.Text("Status: idle", key="-STATUS-")],
     ]
 
     window = sg.Window(
@@ -652,7 +652,7 @@ def main():
     window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
-    window["-STATUS-"].update(f"РЎС‚Р°С‚СѓСЃ: idle | build: {build_info}")
+    window["-STATUS-"].update(f"Status: idle | build: {build_info}")
     _emit_info(window, f"Build: {build_info}")
     running = False
     last_run_count = 0
