@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
+from dubpipeline.utils.build_info import get_build_info
 from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
@@ -423,6 +424,7 @@ def main() -> None:
 
     log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
     init_logger(log_path)
+    info(f"[dubpipeline] build: {get_build_info()}")
 
     for input_file in files:
         run_cfg = _build_cfg_for_input(cfg, input_file)

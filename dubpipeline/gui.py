@@ -15,6 +15,7 @@ import shutil
 from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode, load_pipeline_config_ex, pipeline_path
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
+from dubpipeline.utils.build_info import get_build_info
 from dubpipeline.utils.logging import info, error
 from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
 from dubpipeline.input_mode import resolve_saved_input_state, validate_input_path
@@ -639,7 +640,8 @@ def main():
         finalize=True,
     )
 
-    BASE_TITLE = "DubPipeline GUI"
+    build_info = get_build_info()
+    BASE_TITLE = f"DubPipeline GUI ({build_info})"
     preview = PreviewController()
 
     # на всякий случай ещё раз говорим, что лог должен тянуться
@@ -650,6 +652,8 @@ def main():
     window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
+    window["-STATUS-"].update(f"РЎС‚Р°С‚СѓСЃ: idle | build: {build_info}")
+    _emit_info(window, f"Build: {build_info}")
     running = False
     last_run_count = 0
     set_source_mode(window, default_is_dir)
