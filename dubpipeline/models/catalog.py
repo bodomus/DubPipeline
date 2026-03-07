@@ -5,19 +5,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-Tier = Literal["A", "B", "C"]
+from dubpipeline.models.storage import (
+    configure_argos_packages_dir,
+    get_argos_packages_dir,
+    get_hf_snapshot_dir,
+)
 
-SUPPORTED_BACKENDS = {"nllb", "opus_mt", "argos"}
+Tier = Literal["A", "B", "C"]
+InstallerKind = Literal["hf_snapshot", "argos_package", "none"]
+
 NOT_INSTALLED_REASON = "not installed"
 NOT_SUPPORTED_REASON = "not supported yet"
 
-_HF_REQUIRED_FILES = {
+_HF_REQUIRED_CORE_FILES = {
     "config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "generation_config.json",
+}
+
+_HF_REQUIRED_WEIGHT_FILES = {
     "model.safetensors",
+    "model.safetensors.index.json",
     "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+}
+
+_HF_TOKENIZER_MARKERS = {
+    "tokenizer.json",
+    "tokenizer.model",
+    "sentencepiece.bpe.model",
 }
 
 
@@ -35,7 +49,11 @@ class ModelSpec:
     label: str
     backend: str
     model_ref: str
+    supported: bool
+    installer: InstallerKind
     local_check: Callable[["ModelSpec"], tuple[bool, str]]
+    estimated_size_bytes: int | None = None
+    status_hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,28 +66,20 @@ class ModelChoice:
     reason: str
     color: str
     is_group_header: bool = False
+    supported: bool = True
+    installer: InstallerKind = "none"
 
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def _local_model_dirs() -> list[Path]:
+def _legacy_local_model_dirs() -> list[Path]:
     dirs: list[Path] = []
     env_models = os.getenv("DUBPIPELINE_MODELS_DIR", "").strip()
     if env_models:
         dirs.append(Path(env_models).expanduser())
     dirs.append(_project_root() / "models")
-    return dirs
-
-
-def _llm_model_dirs() -> list[Path]:
-    dirs: list[Path] = []
-    env_llm = os.getenv("DUBPIPELINE_LLM_MODELS_DIR", "").strip()
-    if env_llm:
-        dirs.append(Path(env_llm).expanduser())
-    for base in _local_model_dirs():
-        dirs.append(base / "llm")
     return dirs
 
 
@@ -93,24 +103,30 @@ def _hf_cache_roots() -> list[Path]:
     return roots
 
 
-def _dir_has_hf_artifacts(folder: Path) -> bool:
+def _dir_has_complete_hf_snapshot(folder: Path) -> bool:
     if not folder.exists() or not folder.is_dir():
         return False
     try:
         names = {p.name for p in folder.iterdir() if p.is_file()}
     except OSError:
         return False
-    return bool(_HF_REQUIRED_FILES.intersection(names))
+
+    has_core = _HF_REQUIRED_CORE_FILES.issubset(names)
+    has_weights = bool(_HF_REQUIRED_WEIGHT_FILES.intersection(names))
+    has_tokenizer = bool(_HF_TOKENIZER_MARKERS.intersection(names)) or (
+        "source.spm" in names and "target.spm" in names
+    )
+
+    return has_core and has_weights and has_tokenizer
 
 
 def _local_hf_candidates(spec: ModelSpec, model_ref_safe: str) -> list[Path]:
-    model_ref = spec.model_ref
-    model_ref_name = Path(model_ref).name
-    candidates: list[Path] = []
-    for base in _local_model_dirs():
+    model_ref_name = Path(spec.model_ref).name
+    candidates: list[Path] = [get_hf_snapshot_dir(spec.model_ref, create=False)]
+    for base in _legacy_local_model_dirs():
         candidates.extend(
             [
-                base / model_ref,
+                base / spec.model_ref,
                 base / model_ref_safe,
                 base / spec.id,
                 base / model_ref_name,
@@ -121,7 +137,7 @@ def _local_hf_candidates(spec: ModelSpec, model_ref_safe: str) -> list[Path]:
 
 def _has_local_hf_model(spec: ModelSpec, model_ref_safe: str) -> bool:
     for candidate in _local_hf_candidates(spec, model_ref_safe):
-        if candidate.is_file() or _dir_has_hf_artifacts(candidate):
+        if _dir_has_complete_hf_snapshot(candidate):
             return True
     return False
 
@@ -136,10 +152,10 @@ def _has_hf_cache_model(model_ref_safe: str) -> bool:
         snapshots_dir = repo_dir / "snapshots"
         if snapshots_dir.exists() and snapshots_dir.is_dir():
             for snapshot in snapshots_dir.iterdir():
-                if _dir_has_hf_artifacts(snapshot):
+                if _dir_has_complete_hf_snapshot(snapshot):
                     return True
 
-        if _dir_has_hf_artifacts(repo_dir):
+        if _dir_has_complete_hf_snapshot(repo_dir):
             return True
     return False
 
@@ -153,43 +169,37 @@ def _check_hf_model_available(spec: ModelSpec) -> tuple[bool, str]:
     return False, NOT_INSTALLED_REASON
 
 
+def _argos_lang_pair(spec: ModelSpec) -> tuple[str, str]:
+    ref = (spec.model_ref or "").strip().lower()
+    if ref.startswith("argos-"):
+        parts = ref.split("-")
+        if len(parts) >= 3 and parts[1] and parts[2]:
+            return parts[1], parts[2]
+    return "en", "ru"
+
+
 def _check_argos_available(spec: ModelSpec) -> tuple[bool, str]:
-    _ = spec
+    configure_argos_packages_dir(create=True)
+    src_lang, tgt_lang = _argos_lang_pair(spec)
     try:
         from argostranslate import package
     except Exception:
         return False, NOT_INSTALLED_REASON
 
     try:
-        installed = package.get_installed_packages()
+        installed = package.get_installed_packages(path=get_argos_packages_dir(create=True))
     except Exception:
         return False, NOT_INSTALLED_REASON
 
     for pkg in installed:
-        if getattr(pkg, "from_code", None) == "en" and getattr(pkg, "to_code", None) == "ru":
+        if getattr(pkg, "from_code", None) == src_lang and getattr(pkg, "to_code", None) == tgt_lang:
             return True, ""
 
     return False, NOT_INSTALLED_REASON
 
 
 def _check_gguf_available(spec: ModelSpec) -> tuple[bool, str]:
-    tokens = {
-        spec.id.lower().replace("_", "-"),
-        spec.model_ref.lower().replace("/", "-"),
-        Path(spec.model_ref).name.lower().replace("_", "-"),
-    }
-
-    for model_dir in _llm_model_dirs():
-        if not model_dir.exists():
-            continue
-        try:
-            for gguf_file in model_dir.rglob("*.gguf"):
-                file_name = gguf_file.name.lower().replace("_", "-")
-                if any(token in file_name for token in tokens):
-                    return True, ""
-        except OSError:
-            continue
-
+    _ = spec
     return False, NOT_INSTALLED_REASON
 
 
@@ -200,7 +210,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Meta NLLB-200 (1.3B)",
         backend="nllb",
         model_ref="facebook/nllb-200-1.3B",
+        supported=True,
+        installer="hf_snapshot",
         local_check=_check_hf_model_available,
+        estimated_size_bytes=6 * 1024 * 1024 * 1024,
     ),
     ModelSpec(
         id="nllb_200_3_3b",
@@ -208,7 +221,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Meta NLLB-200 (3.3B)",
         backend="nllb",
         model_ref="facebook/nllb-200-3.3B",
+        supported=True,
+        installer="hf_snapshot",
         local_check=_check_hf_model_available,
+        estimated_size_bytes=14 * 1024 * 1024 * 1024,
     ),
     ModelSpec(
         id="qwen2_5_7b",
@@ -216,7 +232,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Qwen2.5 (7B)",
         backend="llm_qwen",
         model_ref="Qwen/Qwen2.5-7B-Instruct",
+        supported=False,
+        installer="none",
         local_check=_check_gguf_available,
+        status_hint="planned",
     ),
     ModelSpec(
         id="qwen2_5_14b",
@@ -224,7 +243,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Qwen2.5 (14B)",
         backend="llm_qwen",
         model_ref="Qwen/Qwen2.5-14B-Instruct",
+        supported=False,
+        installer="none",
         local_check=_check_gguf_available,
+        status_hint="planned",
     ),
     ModelSpec(
         id="mistral_7b",
@@ -232,7 +254,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Mistral 7B",
         backend="llm_mistral",
         model_ref="mistralai/Mistral-7B-Instruct-v0.3",
+        supported=False,
+        installer="none",
         local_check=_check_gguf_available,
+        status_hint="planned",
     ),
     ModelSpec(
         id="mixtral_8x7b",
@@ -240,7 +265,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Mixtral (8x7B)",
         backend="llm_mistral",
         model_ref="mistralai/Mixtral-8x7B-Instruct-v0.1",
+        supported=False,
+        installer="none",
         local_check=_check_gguf_available,
+        status_hint="planned",
     ),
     ModelSpec(
         id="opus_mt",
@@ -248,7 +276,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="OPUS-MT (Helsinki-NLP)",
         backend="opus_mt",
         model_ref="Helsinki-NLP/opus-mt-en-ru",
+        supported=True,
+        installer="hf_snapshot",
         local_check=_check_hf_model_available,
+        estimated_size_bytes=1 * 1024 * 1024 * 1024,
     ),
     ModelSpec(
         id="argos",
@@ -256,7 +287,10 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         label="Argos Translate",
         backend="argos",
         model_ref="argos-en-ru",
+        supported=True,
+        installer="argos_package",
         local_check=_check_argos_available,
+        estimated_size_bytes=None,
     ),
 )
 
@@ -276,11 +310,20 @@ def get_model_spec(model_id: str) -> ModelSpec:
         raise ValueError(f"Unknown translation model_id: '{model_id}'") from exc
 
 
+def get_model_install_dir(model_id: str) -> Path | None:
+    spec = get_model_spec(model_id)
+    if spec.installer == "hf_snapshot":
+        return get_hf_snapshot_dir(spec.model_ref, create=False)
+    if spec.installer == "argos_package":
+        return get_argos_packages_dir(create=False)
+    return None
+
+
 def get_model_status(model_id: str) -> ModelStatus:
     spec = get_model_spec(model_id)
     available, reason = spec.local_check(spec)
 
-    if spec.backend not in SUPPORTED_BACKENDS:
+    if not spec.supported:
         return ModelStatus(available=available, enabled=False, reason=NOT_SUPPORTED_REASON)
     if not available:
         return ModelStatus(available=False, enabled=False, reason=reason or NOT_INSTALLED_REASON)
@@ -349,6 +392,8 @@ def build_model_choices() -> list[ModelChoice]:
                 reason="",
                 color="gray40",
                 is_group_header=True,
+                supported=False,
+                installer="none",
             )
         )
 
@@ -356,15 +401,19 @@ def build_model_choices() -> list[ModelChoice]:
             status = get_model_status(spec.id)
             suffix = ""
             if status.reason == NOT_SUPPORTED_REASON:
-                suffix = " (not supported yet)"
+                suffix = " (planned)"
+            elif status.reason.startswith("failed"):
+                suffix = f" ({status.reason})"
             elif not status.available:
                 suffix = " (not installed)"
 
             color = "black"
             if status.reason == NOT_SUPPORTED_REASON:
                 color = "gray45"
-            elif not status.available:
+            elif status.reason.startswith("failed"):
                 color = "firebrick"
+            elif not status.available:
+                color = "gray45"
 
             choices.append(
                 ModelChoice(
@@ -375,6 +424,8 @@ def build_model_choices() -> list[ModelChoice]:
                     available=status.available,
                     reason=status.reason,
                     color=color,
+                    supported=spec.supported,
+                    installer=spec.installer,
                 )
             )
     return choices

@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from dubpipeline.config import PipelineConfig
+from dubpipeline.models.catalog import build_model_choices, get_model_status
+from dubpipeline.models.installer import ModelInstaller
+from dubpipeline.models.storage import get_hf_snapshot_dir
+from dubpipeline.translation.service import TranslatorService
+
+
+class _FakeDiskUsage:
+    def __init__(self, free: int) -> None:
+        self.total = free
+        self.used = 0
+        self.free = free
+
+
+class ModelInstallerTests(unittest.TestCase):
+    def test_free_space_check_blocks_install_when_space_is_low(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
+                installer = ModelInstaller(disk_usage_fn=lambda _path: _FakeDiskUsage(1024 * 1024))
+                result = installer.install("nllb_200_3_3b")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "failed")
+        self.assertIn("Not enough disk space", result.message)
+
+    def test_hf_install_uses_expected_local_dir(self):
+        captured: dict[str, object] = {}
+
+        def fake_snapshot_download(**kwargs):
+            captured.update(kwargs)
+            local_dir = Path(kwargs["local_dir"])
+            local_dir.mkdir(parents=True, exist_ok=True)
+            (local_dir / "config.json").write_text("{}", encoding="utf-8")
+            (local_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+            (local_dir / "model.safetensors").write_bytes(b"00")
+            return str(local_dir)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
+                with patch("dubpipeline.models.catalog._legacy_local_model_dirs", return_value=[]):
+                    with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[]):
+                        installer = ModelInstaller(
+                            snapshot_download_fn=fake_snapshot_download,
+                            disk_usage_fn=lambda _path: _FakeDiskUsage(100 * 1024 * 1024 * 1024),
+                        )
+                        result = installer.install("opus_mt")
+                        expected = get_hf_snapshot_dir("Helsinki-NLP/opus-mt-en-ru", create=False)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(Path(captured["local_dir"]), expected)
+        self.assertFalse(bool(captured["local_dir_use_symlinks"]))
+        self.assertTrue(bool(captured["resume_download"]))
+
+    def test_not_supported_model_is_not_installable_and_not_selectable(self):
+        installer = ModelInstaller()
+        result = installer.install("qwen2_5_7b")
+        status = get_model_status("qwen2_5_7b")
+        qwen_choice = next(choice for choice in build_model_choices() if choice.model_id == "qwen2_5_7b")
+
+        self.assertFalse(result.ok)
+        self.assertIn("planned", result.message.lower())
+        self.assertFalse(status.enabled)
+        self.assertFalse(qwen_choice.enabled)
+        self.assertIn("planned", qwen_choice.display.lower())
+
+
+class TranslationOfflineSmokeTests(unittest.TestCase):
+    def test_installed_hf_model_is_loaded_from_local_dir_with_local_files_only(self):
+        class FakeTokenizer:
+            calls: list[tuple[object, dict[str, object]]] = []
+
+            @classmethod
+            def from_pretrained(cls, model_ref, **kwargs):
+                cls.calls.append((model_ref, kwargs))
+                return object()
+
+        class _FakeLoadedModel:
+            def eval(self):
+                return self
+
+            def to(self, _device):
+                return self
+
+        class FakeModel:
+            calls: list[tuple[object, dict[str, object]]] = []
+
+            @classmethod
+            def from_pretrained(cls, model_ref, **kwargs):
+                cls.calls.append((model_ref, kwargs))
+                return _FakeLoadedModel()
+
+        fake_torch = types.SimpleNamespace(
+            float16="float16",
+            cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None),
+        )
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=FakeTokenizer,
+            AutoModelForSeq2SeqLM=FakeModel,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
+                model_dir = get_hf_snapshot_dir("Helsinki-NLP/opus-mt-en-ru", create=True)
+                (model_dir / "config.json").write_text("{}", encoding="utf-8")
+                (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+                (model_dir / "model.safetensors").write_bytes(b"00")
+
+                cfg = PipelineConfig(project_name="sample", project_dir=Path(tmp))
+                cfg.translation.model_id = "opus_mt"
+                cfg.translation.backend = "opus_mt"
+                cfg.translation.model_ref = "Helsinki-NLP/opus-mt-en-ru"
+                cfg.usegpu = False
+
+                TranslatorService._HF_CACHE.clear()
+                with patch.dict("sys.modules", {"torch": fake_torch, "transformers": fake_transformers}):
+                    service = TranslatorService(cfg)
+                    service._load_hf()
+
+        tokenizer_ref, tokenizer_kwargs = FakeTokenizer.calls[0]
+        model_ref, model_kwargs = FakeModel.calls[0]
+
+        self.assertEqual(Path(tokenizer_ref), model_dir)
+        self.assertEqual(Path(model_ref), model_dir)
+        self.assertTrue(bool(tokenizer_kwargs.get("local_files_only")))
+        self.assertTrue(bool(model_kwargs.get("local_files_only")))
+
+
+if __name__ == "__main__":
+    unittest.main()

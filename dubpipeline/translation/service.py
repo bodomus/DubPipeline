@@ -3,14 +3,15 @@ from __future__ import annotations
 import gc
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dubpipeline.models.catalog import (
-    NOT_INSTALLED_REASON,
-    NOT_SUPPORTED_REASON,
+    get_model_install_dir,
     get_model_spec,
     get_model_status,
 )
+from dubpipeline.models.storage import configure_argos_packages_dir, get_argos_packages_dir
 
 if TYPE_CHECKING:
     from dubpipeline.config import PipelineConfig
@@ -45,6 +46,7 @@ class ActiveModel:
     label: str
     backend: str
     model_ref: str
+    local_dir: str = ""
 
 
 def _normalize_text(text: str) -> str:
@@ -129,27 +131,26 @@ class TranslatorService:
 
         spec = get_model_spec(model_id)
         status = get_model_status(model_id)
-        if not status.enabled:
-            if status.reason == NOT_SUPPORTED_REASON:
-                raise TranslationModelUnavailableError(
-                    f"Translation model '{spec.label}' is not supported yet in this build. "
-                    "Please choose another model in Models..."
-                )
-            if status.reason == NOT_INSTALLED_REASON or not status.available:
-                raise TranslationModelUnavailableError(
-                    f"Translation model '{spec.label}' is not installed locally. "
-                    "Please install it or choose another model in Models..."
-                )
+        if not spec.supported:
             raise TranslationModelUnavailableError(
-                f"Translation model '{spec.label}' is unavailable ({status.reason}). "
-                "Please choose another model in Models..."
+                "Model is planned and not supported yet"
             )
+        if not status.available:
+            raise TranslationModelUnavailableError(
+                "Model not installed: open Models -> Install"
+            )
+
+        local_dir = ""
+        model_dir = get_model_install_dir(spec.id)
+        if spec.installer == "hf_snapshot" and model_dir is not None and model_dir.exists():
+            local_dir = str(model_dir)
 
         return ActiveModel(
             model_id=spec.id,
             label=spec.label,
             backend=spec.backend,
             model_ref=spec.model_ref,
+            local_dir=local_dir,
         )
 
     def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
@@ -199,7 +200,11 @@ class TranslatorService:
             return "cpu"
 
     def _load_hf(self) -> tuple[object, object, str]:
-        model_ref = self._active.model_ref
+        model_ref = self._active.local_dir or self._active.model_ref
+        if self._active.local_dir and not Path(self._active.local_dir).exists():
+            raise TranslationModelUnavailableError(
+                "Model not installed: open Models -> Install"
+            )
         device = self._device()
         cache_key = (device, model_ref)
         self._hf_cache_key = cache_key
@@ -236,10 +241,7 @@ class TranslatorService:
                     **load_kwargs,
                 )
             except Exception as exc:
-                raise TranslationModelUnavailableError(
-                    f"Translation model '{self._active.label}' is not installed locally. "
-                    "Please install it or choose another model in Models..."
-                ) from exc
+                raise TranslationModelUnavailableError("Model not installed: open Models -> Install") from exc
 
         model.eval()
         model.to(device)
@@ -338,23 +340,21 @@ class TranslatorService:
         src_lang = (self._cfg.languages.src or "en").strip()
         tgt_lang = (self._cfg.languages.tgt or "ru").strip()
 
+        configure_argos_packages_dir(create=True)
+
         try:
             from argostranslate import package, translate
         except Exception as exc:
             raise TranslationModelUnavailableError(
-                "Argos Translate is not installed locally. "
-                "Install Argos package or choose another model in Models..."
+                "Model not installed: open Models -> Install"
             ) from exc
 
-        installed = package.get_installed_packages()
+        installed = package.get_installed_packages(path=get_argos_packages_dir(create=True))
         if not any(
             getattr(pkg, "from_code", None) == src_lang and getattr(pkg, "to_code", None) == tgt_lang
             for pkg in installed
         ):
-            raise TranslationModelUnavailableError(
-                f"Translation model '{self._active.label}' is not installed locally. "
-                "Please install it or choose another model in Models..."
-            )
+            raise TranslationModelUnavailableError("Model not installed: open Models -> Install")
 
         out: list[str] = []
         for src in texts:

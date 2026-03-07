@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import patch
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.models.catalog import (
+    NOT_SUPPORTED_REASON,
     ModelStatus,
     build_model_choices,
     get_model_status,
@@ -35,18 +37,75 @@ class TranslationModelCatalogTests(unittest.TestCase):
         }
         self.assertTrue(required_ids.issubset(set(ids)))
 
+    def test_qwen_and_mistral_specs_are_planned(self):
+        specs = {spec.id: spec for spec in list_model_specs()}
+        for model_id in ("qwen2_5_7b", "qwen2_5_14b", "mistral_7b", "mixtral_8x7b"):
+            with self.subTest(model_id=model_id):
+                spec = specs[model_id]
+                self.assertFalse(spec.supported)
+                self.assertEqual(spec.installer, "none")
+                self.assertEqual(spec.status_hint, "planned")
+
 
 class TranslationModelStatusTests(unittest.TestCase):
     def test_status_is_not_installed_when_model_files_are_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            with patch("dubpipeline.models.catalog._local_model_dirs", return_value=[tmp_path / "models"]):
-                with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[tmp_path / "hf_cache"]):
-                    status = get_model_status("nllb_200_1_3b")
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": str(tmp_path / "app_models")}):
+                with patch("dubpipeline.models.catalog._legacy_local_model_dirs", return_value=[tmp_path / "models"]):
+                    with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[tmp_path / "hf_cache"]):
+                        status = get_model_status("nllb_200_1_3b")
 
         self.assertFalse(status.available)
         self.assertFalse(status.enabled)
         self.assertEqual(status.reason, "not installed")
+
+    def test_status_is_not_installed_when_hf_snapshot_is_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "hf_cache"
+            snapshot = (
+                cache_root
+                / "models--facebook--nllb-200-1.3B"
+                / "snapshots"
+                / "partial"
+            )
+            snapshot.mkdir(parents=True, exist_ok=True)
+            (snapshot / "config.json").write_text("{}", encoding="utf-8")
+            (snapshot / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": str(tmp_path / "app_models")}):
+                with patch("dubpipeline.models.catalog._legacy_local_model_dirs", return_value=[tmp_path / "models"]):
+                    with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[cache_root]):
+                        status = get_model_status("nllb_200_1_3b")
+
+        self.assertFalse(status.available)
+        self.assertFalse(status.enabled)
+        self.assertEqual(status.reason, "not installed")
+
+    def test_status_is_installed_when_hf_snapshot_is_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            cache_root = tmp_path / "hf_cache"
+            snapshot = (
+                cache_root
+                / "models--facebook--nllb-200-1.3B"
+                / "snapshots"
+                / "complete"
+            )
+            snapshot.mkdir(parents=True, exist_ok=True)
+            (snapshot / "config.json").write_text("{}", encoding="utf-8")
+            (snapshot / "tokenizer.json").write_text("{}", encoding="utf-8")
+            (snapshot / "model.safetensors").write_bytes(b"00")
+
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": str(tmp_path / "app_models")}):
+                with patch("dubpipeline.models.catalog._legacy_local_model_dirs", return_value=[tmp_path / "models"]):
+                    with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[cache_root]):
+                        status = get_model_status("nllb_200_1_3b")
+
+        self.assertTrue(status.available)
+        self.assertTrue(status.enabled)
+        self.assertEqual(status.reason, "")
 
 
 class TranslationModelChoiceTests(unittest.TestCase):
@@ -57,7 +116,7 @@ class TranslationModelChoiceTests(unittest.TestCase):
             if model_id == "opus_mt":
                 return ModelStatus(available=False, enabled=False, reason="not installed")
             if model_id in {"qwen2_5_7b", "qwen2_5_14b", "mistral_7b", "mixtral_8x7b"}:
-                return ModelStatus(available=False, enabled=False, reason="not supported yet")
+                return ModelStatus(available=False, enabled=False, reason=NOT_SUPPORTED_REASON)
             return ModelStatus(available=True, enabled=True, reason="")
 
         with patch("dubpipeline.models.catalog.get_model_status", side_effect=fake_status):
@@ -69,10 +128,14 @@ class TranslationModelChoiceTests(unittest.TestCase):
         opus_choice = next(choice for choice in choices if choice.model_id == "opus_mt")
         self.assertFalse(opus_choice.enabled)
         self.assertIn("not installed", opus_choice.display)
+        self.assertTrue(opus_choice.supported)
+        self.assertEqual(opus_choice.installer, "hf_snapshot")
 
         qwen_choice = next(choice for choice in choices if choice.model_id == "qwen2_5_7b")
         self.assertFalse(qwen_choice.enabled)
-        self.assertIn("not supported yet", qwen_choice.display)
+        self.assertIn("planned", qwen_choice.display)
+        self.assertFalse(qwen_choice.supported)
+        self.assertEqual(qwen_choice.installer, "none")
 
 
 class TranslationStepIntegrationTests(unittest.TestCase):
