@@ -30,6 +30,7 @@ from dubpipeline.utils.build_info import get_build_info
 from dubpipeline.utils.logging import info, error
 from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
 from dubpipeline.input_mode import resolve_saved_input_state, validate_input_path
+from dubpipeline.external_subtitles import find_external_subtitle_for_video, missing_subtitles_error
 
 
 def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_text: str, out_file: str, use_gpu: bool) -> None:
@@ -696,6 +697,13 @@ def sync_update_existing_controls(window, values) -> None:
         window["-OUT-"].update(candidate)
 
 
+def _validate_existing_subtitles_for_files(files: list[Path]) -> tuple[bool, str]:
+    for video_file in files:
+        if find_external_subtitle_for_video(video_file) is None:
+            return False, missing_subtitles_error(video_file)
+    return True, ""
+
+
 def handle_file_event(window, values, base_title: str) -> None:
     data = values["-FILE-"] or {}
     idx = data.get("idx", 0)
@@ -730,6 +738,12 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
     if not files:
         sg.popup_error("В выбранной папке нет видео-файлов (*.mp4, *.mkv, *.mov, *.avi).")
         return None, 0
+
+    if bool(values.get("-USE_EXISTING_SUBTITLES-", False)):
+        ok_subs, err_subs = _validate_existing_subtitles_for_files(files)
+        if not ok_subs:
+            sg.popup_error(err_subs)
+            return None, 0
 
     base_out = values["-OUT-"].strip()
     if not base_out:
@@ -767,6 +781,12 @@ def _prepare_single_file_run(values, current_steps, window):
     if not ok:
         sg.popup_error(err)
         return None, 0
+
+    if bool(values.get("-USE_EXISTING_SUBTITLES-", False)):
+        ok_subs, err_subs = _validate_existing_subtitles_for_files([Path(input_path)])
+        if not ok_subs:
+            sg.popup_error(err_subs)
+            return None, 0
 
     base_out = values["-OUT-"].strip()
     if not base_out:
@@ -870,6 +890,7 @@ def main():
     default_input_mode, default_input_path = resolve_saved_input_state(BASE_CFG)
     default_is_dir = default_input_mode == "dir"
     default_update_existing = bool(base_output_cfg.get("update_existing_file", False))
+    default_use_existing_subtitles = bool(BASE_CFG.get("use_existing_subtitles", False))
     default_mode_display = _mode_to_display(base_output_cfg.get("audio_update_mode", BASE_CFG.get("mode", "add")))
     default_out_dir = str(base_paths_cfg.get("out_dir") or "")
 
@@ -929,6 +950,8 @@ def main():
         [sg.Text("Переместить в папку:"),
          sg.Input(key="-MOVE_TO_DIR-", expand_x=True, enable_events=True),
          sg.FolderBrowse("...", key="-BROWSE_MOVE_DIR-", target="-MOVE_TO_DIR-")],
+
+        [sg.Checkbox("Использовать существующий файл субтитров", key="-USE_EXISTING_SUBTITLES-", default=default_use_existing_subtitles)],
 
         [sg.Checkbox("Использовать GPU?", key="-GPU-")],
         [sg.Checkbox("Удалять субтитры?", key="-SRT-")],
