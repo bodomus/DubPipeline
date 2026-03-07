@@ -280,6 +280,7 @@ class PipelineConfig:
     project_dir: Path
     mode: str = "Добавление"  # Добавление|Замена
     usegpu: bool = True
+    use_existing_subtitles: bool = False
     delete_srt: bool = True
     rebuild: bool = False
     cleanup: bool = False
@@ -322,6 +323,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "input_path": "",
     "mode": "Добавление",
     "usegpu": True,
+    "use_existing_subtitles": False,
     "delete_srt": True,
     "rebuild": False,
     "cleanup": False,
@@ -451,6 +453,8 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
         "DUBPIPELINE_OUTPUT_UPDATE_EXISTING_FILE": "output.update_existing_file",
         "DUBPIPELINE_OUTPUT_AUDIO_UPDATE_MODE": "output.audio_update_mode",
+        # Existing subtitles mode
+        "DUBPIPELINE_USE_EXISTING_SUBTITLES": "use_existing_subtitles",
     }
 
     overrides: Dict[str, Any] = {}
@@ -725,6 +729,7 @@ def load_pipeline_config_ex(
         project_dir=project_dir,
         mode=str(merged.get("mode") or "Добавление"),
         usegpu=bool(merged.get("usegpu") if "usegpu" in merged else merged.get("use_gpu", merged.get("usegpu", True))),
+        use_existing_subtitles=bool(merged.get("use_existing_subtitles", False)),
         delete_srt=bool(merged.get("delete_srt", merged.get("deleteSRT", True))),
         rebuild=bool(merged.get("rebuild", False)),
         cleanup=bool(merged.get("cleanup", False)),
@@ -782,6 +787,9 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg["input_path"] = input_path
     cfg["mode"] = selected_mode
     cfg["usegpu"] = bool(values.get("-GPU-", True))
+    cfg["use_existing_subtitles"] = bool(
+        values.get("-USE_EXISTING_SUBTITLES-", cfg.get("use_existing_subtitles", False))
+    )
     cfg["rebuild"] = bool(values.get("-REBUILD-", False))
     cfg["delete_srt"] = bool(values.get("-SRT-", False))
     cfg["cleanup"] = bool(values.get("-CLEANUP-", False))
