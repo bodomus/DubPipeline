@@ -105,8 +105,21 @@ class Const:
 
     @classmethod
     def translate_backend(cls) -> str:
-        return str(cls.cfg().translate.backend)
+        cfg = cls.cfg()
+        if getattr(cfg, "translation", None) is not None and cfg.translation.backend:
+            return str(cfg.translation.backend)
+        return str(cfg.translate.backend)
+
+    @classmethod
+    def translate_model_id(cls) -> str:
+        cfg = cls.cfg()
+        if getattr(cfg, "translation", None) is None:
+            return ""
+        return str(cfg.translation.model_id)
 
     @classmethod
     def translate_hf_model(cls) -> str:
-        return str(cls.cfg().translate.hf_model)
+        cfg = cls.cfg()
+        if getattr(cfg, "translation", None) is not None and cfg.translation.model_ref:
+            return str(cfg.translation.model_ref)
+        return str(cfg.translate.hf_model)

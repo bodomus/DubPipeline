@@ -11,6 +11,12 @@ from typing import Any, Dict, Iterable, Optional
 import torch
 import yaml
 
+from dubpipeline.models.catalog import (
+    get_model_spec,
+    infer_model_id_from_legacy_translate,
+    legacy_translate_backend_for_model,
+    resolve_default_model_id,
+)
 from dubpipeline.utils.logging import info, warn
 
 
@@ -196,6 +202,13 @@ class TranslateConfig:
 
 
 @dataclass
+class TranslationConfig:
+    backend: str = ""
+    model_id: str = ""
+    model_ref: str = ""
+
+
+@dataclass
 class TtsConfig:
     model_name: str = "tts_models/multilingual/multi-dataset/xtts_v2"
     voice: str = ""
@@ -279,6 +292,7 @@ class PipelineConfig:
     ffmpeg: FfmpegConfig = field(default_factory=FfmpegConfig)
     whisperx: WhisperxConfig = field(default_factory=WhisperxConfig)
     translate: TranslateConfig = field(default_factory=TranslateConfig)
+    translation: TranslationConfig = field(default_factory=TranslationConfig)
     tts: TtsConfig = field(default_factory=TtsConfig)
     mux: MuxConfig = field(default_factory=MuxConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -323,6 +337,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "ffmpeg": asdict(FfmpegConfig()),
     "whisperx": asdict(WhisperxConfig()),
     "translate": asdict(TranslateConfig()),
+    "translation": asdict(TranslationConfig()),
     "tts": asdict(TtsConfig()),
     "mux": asdict(MuxConfig()),
     "output": {
@@ -398,6 +413,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "FFM": "ffmpeg",
         "WHX": "whisperx",
         "TRN": "translate",
+        "TLN": "translation",
         "TTS": "tts",
         "MUX": "mux",
         "AMR": "audio_merge",
@@ -427,6 +443,10 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TRANSLATE_MAX_NEW_TOKENS": "translate.max_new_tokens",
         "DUBPIPELINE_CACHE_DB": "translate.cache_db",
         "DUBPIPELINE_TRANSLATE_RELEASE_VRAM": "translate.release_vram",
+        # Translation model selector (new unified source of truth)
+        "DUBPIPELINE_TRANSLATION_BACKEND": "translation.backend",
+        "DUBPIPELINE_TRANSLATION_MODEL_ID": "translation.model_id",
+        "DUBPIPELINE_TRANSLATION_MODEL_REF": "translation.model_ref",
         # Output
         "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
         "DUBPIPELINE_OUTPUT_UPDATE_EXISTING_FILE": "output.update_existing_file",
@@ -637,6 +657,37 @@ def load_pipeline_config_ex(
     )
 
     translate = TranslateConfig(**(merged.get("translate") or {}))
+    translation_raw = merged.get("translation") or {}
+    translation = TranslationConfig(**translation_raw)
+
+    translate_defaults = TranslateConfig()
+    legacy_model_id = None
+    if (
+        str(translate.backend).strip().lower() != translate_defaults.backend
+        or str(translate.hf_model).strip() != translate_defaults.hf_model
+    ):
+        legacy_model_id = infer_model_id_from_legacy_translate(
+            translate.backend,
+            translate.hf_model,
+        )
+    if not translation.model_id:
+        translation.model_id = legacy_model_id or resolve_default_model_id()
+
+    try:
+        model_spec = get_model_spec(translation.model_id)
+    except ValueError:
+        warn(f"[config] Unknown translation.model_id='{translation.model_id}', falling back to default.")
+        translation.model_id = resolve_default_model_id()
+        model_spec = get_model_spec(translation.model_id)
+
+    translation.backend = model_spec.backend
+    translation.model_ref = model_spec.model_ref
+
+    # Keep legacy translate.* fields synchronized for backward compatibility.
+    translate.backend = legacy_translate_backend_for_model(model_spec)
+    if translate.backend == "hf":
+        translate.hf_model = translation.model_ref
+
     tts = TtsConfig(**(merged.get("tts") or {}))
     mux = MuxConfig(**(merged.get("mux") or {}))
     output_raw = merged.get("output") or {}
@@ -684,6 +735,7 @@ def load_pipeline_config_ex(
         ffmpeg=ffmpeg,
         whisperx=whisperx,
         translate=translate,
+        translation=translation,
         tts=tts,
         mux=mux,
         output=output,
@@ -749,6 +801,29 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     # voice
     cfg.setdefault("tts", {})
     cfg["tts"]["voice"] = values.get("-VOICE-", cfg["tts"].get("voice", ""))
+
+    selected_model_id = (
+        values.get("-TRANSLATION_MODEL_ID-", "")
+        or (cfg.get("translation", {}) or {}).get("model_id", "")
+    ).strip()
+    if not selected_model_id:
+        selected_model_id = resolve_default_model_id()
+
+    try:
+        model_spec = get_model_spec(selected_model_id)
+    except ValueError:
+        model_spec = get_model_spec(resolve_default_model_id())
+
+    cfg.setdefault("translation", {})
+    cfg["translation"]["model_id"] = model_spec.id
+    cfg["translation"]["backend"] = model_spec.backend
+    cfg["translation"]["model_ref"] = model_spec.model_ref
+
+    # Keep old keys in sync for compatibility with older scripts/tools.
+    cfg.setdefault("translate", {})
+    cfg["translate"]["backend"] = legacy_translate_backend_for_model(model_spec)
+    if cfg["translate"]["backend"] == "hf":
+        cfg["translate"]["hf_model"] = model_spec.model_ref
 
     cfg.setdefault("output", {})
     cfg["output"]["move_to_dir"] = values.get("-MOVE_TO_DIR-", cfg["output"].get("move_to_dir", ""))

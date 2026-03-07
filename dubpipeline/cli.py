@@ -229,6 +229,10 @@ def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mod
     print(f"  input_video: {cfg.paths.input_video}")
     print(f"  out_dir: {cfg.paths.out_dir}")
     print(f"  lang: {cfg.languages.src} -> {cfg.languages.tgt}")
+    print(
+        f"  translation_model: {cfg.translation.model_id or '-'} "
+        f"({cfg.translation.backend or '-'})"
+    )
     print(f"  device: {'gpu' if cfg.usegpu else 'cpu'}")
     print(f"  rebuild: {cfg.rebuild}")
     print(f"  cleanup_temp: {cfg.cleanup}")

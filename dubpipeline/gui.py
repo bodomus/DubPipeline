@@ -13,6 +13,17 @@ import time
 import shutil
 
 from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode, load_pipeline_config_ex, pipeline_path
+from dubpipeline.models.catalog import (
+    NOT_SUPPORTED_REASON,
+    build_model_choices,
+    get_model_spec,
+    get_model_status,
+    legacy_translate_backend_for_model,
+)
+from dubpipeline.models.installer import (
+    ModelInstallStatus,
+    get_model_installer,
+)
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
 from dubpipeline.utils.build_info import get_build_info
@@ -337,6 +348,314 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
     return result
 
 
+def _translation_summary(model_id: str) -> tuple[str, str]:
+    try:
+        spec = get_model_spec(model_id)
+        status = get_model_status(model_id)
+        install_status = get_model_installer().get_status(model_id)
+    except Exception:
+        return "Machine Translation: unknown model", "firebrick"
+
+    if not spec.supported or status.reason == NOT_SUPPORTED_REASON:
+        return f"Machine Translation: {spec.label} (planned)", "gray45"
+    if install_status.status == "failed":
+        reason = (install_status.error or install_status.message or "install failed").strip()
+        if len(reason) > 64:
+            reason = f"{reason[:61]}..."
+        return f"Machine Translation: {spec.label} (failed: {reason})", "firebrick"
+    if status.enabled:
+        return f"Machine Translation: {spec.label}", "darkgreen"
+    return f"Machine Translation: {spec.label} (not installed)", "gray35"
+
+
+def persist_translation_model(model_id: str) -> None:
+    spec = get_model_spec(model_id)
+    BASE_CFG.setdefault("translation", {})
+    BASE_CFG["translation"]["model_id"] = spec.id
+    BASE_CFG["translation"]["backend"] = spec.backend
+    BASE_CFG["translation"]["model_ref"] = spec.model_ref
+
+    # Keep legacy keys for compatibility with older scripts/tools.
+    BASE_CFG.setdefault("translate", {})
+    BASE_CFG["translate"]["backend"] = legacy_translate_backend_for_model(spec)
+    if BASE_CFG["translate"]["backend"] == "hf":
+        BASE_CFG["translate"]["hf_model"] = spec.model_ref
+
+    with TEMPLATE_PATH.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
+
+
+def show_models_modal(parent, current_model_id: str) -> str | None:
+    installer = get_model_installer()
+    choices = build_model_choices()
+    displays = [item.display for item in choices]
+    by_display = {item.display: item for item in choices}
+
+    selected_display = ""
+    for item in choices:
+        if item.model_id == current_model_id:
+            selected_display = item.display
+            break
+    if not selected_display:
+        for item in choices:
+            if item.model_id and item.enabled:
+                selected_display = item.display
+                break
+    if not selected_display and displays:
+        selected_display = displays[0]
+
+    layout = [
+        [sg.Text("Machine Translation (Text -> Text)", font=("Segoe UI", 11, "bold"))],
+        [
+            sg.Text("Model:", size=(8, 1)),
+            sg.Combo(
+                values=displays,
+                key="-MODELS_MT-",
+                readonly=True,
+                default_value=selected_display,
+                enable_events=True,
+                size=(52, 1),
+            ),
+        ],
+        [
+            sg.ProgressBar(
+                max_value=100,
+                orientation="h",
+                size=(52, 14),
+                key="-MODELS_PROGRESS-",
+                expand_x=True,
+            )
+        ],
+        [
+            sg.Text(
+                "",
+                key="-MODELS_STATUS-",
+                text_color="black",
+                size=(72, 3),
+                expand_x=True,
+            )
+        ],
+        [
+            sg.Button("Install", key="-MODELS_INSTALL-"),
+            sg.Button("Cancel Download", key="-MODELS_CANCEL_INSTALL-", disabled=True),
+            sg.Button("Apply", key="-MODELS_APPLY-"),
+            sg.Button("Close", key="-MODELS_CANCEL-"),
+        ],
+    ]
+
+    window = sg.Window(
+        "Models",
+        layout,
+        modal=True,
+        finalize=True,
+        keep_on_top=True,
+        location=parent.current_location() if parent else None,
+    )
+
+    selected_model_id: str | None = None
+    active_download_model_id: str | None = None
+
+    def _update_state(display_value: str) -> None:
+        nonlocal selected_model_id
+        choice = by_display.get(display_value)
+        if choice is None:
+            window["-MODELS_STATUS-"].update(
+                "Unknown selection. Please choose a model.",
+                text_color="firebrick",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        try:
+            window["-MODELS_MT-"].Widget.configure(foreground=choice.color)
+        except Exception:
+            pass
+
+        if choice.is_group_header:
+            window["-MODELS_STATUS-"].update(
+                "Select a model entry below the tier header.",
+                text_color="darkorange",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        if not choice.model_id:
+            window["-MODELS_STATUS-"].update(
+                "Unknown model entry.",
+                text_color="firebrick",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        spec = get_model_spec(choice.model_id)
+        install_status = installer.get_status(choice.model_id)
+
+        if not spec.supported:
+            window["-MODELS_STATUS-"].update(
+                "Not supported yet (planned). Install is unavailable.",
+                text_color="gray45",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        if install_status.status == "downloading":
+            msg = install_status.message or "Downloading..."
+            window["-MODELS_STATUS-"].update(msg, text_color="blue")
+            window["-MODELS_PROGRESS-"].update_bar(int(max(0.0, min(1.0, install_status.progress)) * 100))
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=False)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        if install_status.status == "failed":
+            error_text = (install_status.error or install_status.message or "install failed").strip()
+            if len(error_text) > 80:
+                error_text = f"{error_text[:77]}..."
+            window["-MODELS_STATUS-"].update(
+                f"Install failed: {error_text}",
+                text_color="firebrick",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=False)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        status = get_model_status(choice.model_id)
+        if status.enabled and install_status.status == "installed":
+            window["-MODELS_STATUS-"].update("Model is installed and ready.", text_color="darkgreen")
+            window["-MODELS_PROGRESS-"].update_bar(100)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=False)
+            selected_model_id = choice.model_id
+            return
+
+        install_hint = "Model is not installed locally. Click Install."
+        if spec.estimated_size_bytes is None:
+            install_hint += " Model size is unknown."
+        window["-MODELS_STATUS-"].update(install_hint, text_color="gray35")
+        window["-MODELS_PROGRESS-"].update_bar(0)
+        window["-MODELS_INSTALL-"].update(disabled=False)
+        window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+        window["-MODELS_APPLY-"].update(disabled=True)
+        selected_model_id = None
+
+    def _refresh_choices(target_model_id: str | None = None) -> None:
+        nonlocal choices, displays, by_display
+        choices = build_model_choices()
+        displays = [item.display for item in choices]
+        by_display = {item.display: item for item in choices}
+        window["-MODELS_MT-"].update(values=displays)
+
+        next_display = ""
+        if target_model_id:
+            for item in choices:
+                if item.model_id == target_model_id:
+                    next_display = item.display
+                    break
+
+        if not next_display:
+            current_display = window["-MODELS_MT-"].get()
+            if current_display in by_display:
+                next_display = current_display
+
+        if not next_display and displays:
+            next_display = displays[0]
+
+        window["-MODELS_MT-"].update(value=next_display)
+        _update_state(next_display)
+
+    _update_state(selected_display)
+
+    result: str | None = None
+    while True:
+        event, values = window.read(timeout=200)
+        if event in (sg.WIN_CLOSED, "-MODELS_CANCEL-"):
+            result = None
+            break
+        if event == "-MODELS_MT-":
+            _update_state(values.get("-MODELS_MT-", ""))
+        if event == "__TIMEOUT__":
+            if active_download_model_id:
+                status = installer.get_status(active_download_model_id)
+                if status.status != "downloading":
+                    active_download_model_id = None
+                _update_state(values.get("-MODELS_MT-", ""))
+            continue
+        if event == "-MODELS_INSTALL-":
+            choice = by_display.get(values.get("-MODELS_MT-", ""))
+            if choice is None or not choice.model_id:
+                continue
+
+            model_id = choice.model_id
+            active_download_model_id = model_id
+
+            def _progress_callback(status: ModelInstallStatus) -> None:
+                window.write_event_value("-MODELS_INSTALL_PROGRESS-", status)
+
+            def _worker() -> None:
+                install_result = installer.install(model_id, progress_cb=_progress_callback)
+                window.write_event_value("-MODELS_INSTALL_DONE-", install_result)
+
+            threading.Thread(target=_worker, daemon=True).start()
+            _update_state(values.get("-MODELS_MT-", ""))
+        if event == "-MODELS_CANCEL_INSTALL-":
+            model_id = active_download_model_id
+            if model_id is None:
+                choice = by_display.get(values.get("-MODELS_MT-", ""))
+                if choice and choice.model_id:
+                    model_id = choice.model_id
+            if model_id:
+                installer.cancel(model_id)
+        if event == "-MODELS_INSTALL_PROGRESS-":
+            progress = values.get("-MODELS_INSTALL_PROGRESS-")
+            if isinstance(progress, ModelInstallStatus):
+                selected_choice = by_display.get(values.get("-MODELS_MT-", ""))
+                if selected_choice and selected_choice.model_id == progress.model_id:
+                    progress_pct = int(max(0.0, min(1.0, progress.progress)) * 100)
+                    window["-MODELS_PROGRESS-"].update_bar(progress_pct)
+                    color = "blue"
+                    if progress.status == "failed":
+                        color = "firebrick"
+                    window["-MODELS_STATUS-"].update(progress.message or "", text_color=color)
+                    if progress.status == "downloading":
+                        window["-MODELS_INSTALL-"].update(disabled=True)
+                        window["-MODELS_CANCEL_INSTALL-"].update(disabled=False)
+                        window["-MODELS_APPLY-"].update(disabled=True)
+        if event == "-MODELS_INSTALL_DONE-":
+            install_result = values.get("-MODELS_INSTALL_DONE-")
+            if install_result is not None and getattr(install_result, "model_id", None) == active_download_model_id:
+                active_download_model_id = None
+            target_model_id = getattr(install_result, "model_id", None)
+            _refresh_choices(target_model_id=target_model_id)
+        if event == "-MODELS_APPLY-":
+            if selected_model_id:
+                result = selected_model_id
+                break
+
+    window.close()
+    return result
+
+
 def persist_move_to_dir(path: str) -> None:
     BASE_CFG.setdefault("output", {})
     BASE_CFG["output"]["move_to_dir"] = path
@@ -532,6 +851,19 @@ def main():
     voices = [v.display_name or v.id for v in voice_infos]
     voice_id_by_display = {v.display_name or v.id: v.id for v in voice_infos}
     current_voice = get_voice() if pipeline_path.exists() else ""
+    current_translation_model_id = ""
+    if cfg is not None:
+        current_translation_model_id = str(cfg.translation.model_id or "").strip()
+    if not current_translation_model_id:
+        current_translation_model_id = str(
+            ((BASE_CFG.get("translation") or {}).get("model_id", ""))
+        ).strip()
+    if not current_translation_model_id:
+        for choice in build_model_choices():
+            if choice.model_id and choice.enabled:
+                current_translation_model_id = choice.model_id
+                break
+
     current_steps = normalize_steps(BASE_CFG.get("steps"))
     base_output_cfg = BASE_CFG.get("output") or {}
     base_paths_cfg = BASE_CFG.get("paths") or {}
@@ -604,6 +936,8 @@ def main():
         [sg.Checkbox("Убирать мусор (удалять временные файлы после успеха)", key="-CLEANUP-")],
         [sg.Button("Шаги генерации...", key="-STEPS-"),
          sg.Text(steps_summary(current_steps), key="-STEPS_SUMMARY-", expand_x=True)],
+        [sg.Button("Models...", key="-MODELS-"),
+         sg.Text("", key="-MODEL_SUMMARY-", expand_x=True)],
         [sg.Text("Режим добавления аудио:"),
          sg.Combo(
              values=audio_mode_labels,
@@ -627,6 +961,7 @@ def main():
             expand_x=True,
             expand_y=True,
         )],
+        [sg.Input(key="-TRANSLATION_MODEL_ID-", visible=False, enable_events=False)],
 
         [sg.Button("Старт", key="-START-"),
          sg.Button("Выход", key="-EXIT-"),
@@ -652,6 +987,9 @@ def main():
     window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
+    window["-TRANSLATION_MODEL_ID-"].update(current_translation_model_id)
+    model_summary_text, model_summary_color = _translation_summary(current_translation_model_id)
+    window["-MODEL_SUMMARY-"].update(model_summary_text, text_color=model_summary_color)
     window["-STATUS-"].update(f"Status: idle | build: {build_info}")
     _emit_info(window, f"Build: {build_info}")
     running = False
@@ -791,6 +1129,17 @@ def main():
         if event == "-DONE-":
             running = False
             handle_done_event(window, values, BASE_TITLE, last_run_count)
+
+        if event == "-MODELS-":
+            selected_model_id = show_models_modal(window, current_translation_model_id)
+            if selected_model_id:
+                current_translation_model_id = selected_model_id
+                window["-TRANSLATION_MODEL_ID-"].update(current_translation_model_id)
+                persist_translation_model(current_translation_model_id)
+                summary_text, summary_color = _translation_summary(current_translation_model_id)
+                window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
+                spec = get_model_spec(current_translation_model_id)
+                _emit_info(window, f"Translation model selected: {spec.label} [{spec.id}]")
 
         if event == "-STEPS-":
             current_steps = show_steps_modal(window, current_steps)
