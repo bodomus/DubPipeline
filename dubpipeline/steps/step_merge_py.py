@@ -194,6 +194,12 @@ def run(cfg:PipelineConfig) -> None:
         os.environ["DUBPIPELINE_FFPROBE_BIN"] = ffprobe_bin
         os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if bool(getattr(cfg, "keep_temp", False)) else "0"
         mix_path = Path(cfg.paths.out_dir) / f"{effective_output.stem}.hq_mix.m4a"
+        replacer: AtomicFileReplacer | None = None
+        mux_out_path = effective_output
+        if update_existing:
+            replacer = AtomicFileReplacer()
+            mux_out_path = replacer.make_temp_path(video)
+            info(f"[merge] update_existing_file enabled; temp output: {mux_out_path}")
         try:
             render_hq_mix_audio(
                 input_video=video,
@@ -203,18 +209,25 @@ def run(cfg:PipelineConfig) -> None:
                 cfg=hq_cfg,
                 original_audio_stream_selector=selector,
             )
-            mux_smart(
-                video,
-                mix_path,
-                effective_output,
-                mode=mux_mode,
-                ffmpeg=ffmpeg_bin,
-                ffprobe=ffprobe_bin,
-                orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
-                orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
-                ru_lang=getattr(getattr(cfg, "mux", None), "ru_lang", "rus"),
-                ru_title=getattr(getattr(cfg, "mux", None), "ru_track_title", "Russian_Dub"),
-            )
+            try:
+                mux_smart(
+                    video,
+                    mix_path,
+                    mux_out_path,
+                    mode=mux_mode,
+                    ffmpeg=ffmpeg_bin,
+                    ffprobe=ffprobe_bin,
+                    orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
+                    orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
+                    ru_lang=getattr(getattr(cfg, "mux", None), "ru_lang", "rus"),
+                    ru_title=getattr(getattr(cfg, "mux", None), "ru_track_title", "Russian_Dub"),
+                )
+                if replacer is not None:
+                    replacer.replace_with_temp(video, mux_out_path, keep_backup=False)
+            except Exception:
+                if replacer is not None:
+                    replacer.cleanup_temp(mux_out_path)
+                raise
         finally:
             if not bool(getattr(cfg, "keep_temp", False)):
                 mix_path.unlink(missing_ok=True)
