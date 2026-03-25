@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import logging
 import os
 import shutil
@@ -9,13 +10,14 @@ from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
-from dubpipeline.external_subtitles import prepare_external_subtitles
-from dubpipeline.utils.build_info import get_build_info
+from dubpipeline.steps.step_text_input import load_text, normalize_text, save_segments_json, split_to_segments
+from dubpipeline.steps.step_tts_core import synthesize_segments_to_wavs
+from dubpipeline.utils.concat_wavs import concat_wavs
 from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
-from dubpipeline.utils.timing import timed_run, timed_block
-from .config import PipelineConfig, load_pipeline_config_ex
+from dubpipeline.utils.timing import timed_block, timed_run
+from .config import PipelineConfig, load_pipeline_config_ex, pipeline_path
 
 STEP_ID_TO_CFG_FIELD = {
     "extract_audio": "extract_audio",
@@ -230,14 +232,9 @@ def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mod
     print(f"  input_video: {cfg.paths.input_video}")
     print(f"  out_dir: {cfg.paths.out_dir}")
     print(f"  lang: {cfg.languages.src} -> {cfg.languages.tgt}")
-    print(
-        f"  translation_model: {cfg.translation.model_id or '-'} "
-        f"({cfg.translation.backend or '-'})"
-    )
     print(f"  device: {'gpu' if cfg.usegpu else 'cpu'}")
     print(f"  rebuild: {cfg.rebuild}")
     print(f"  cleanup_temp: {cfg.cleanup}")
-    print(f"  use_existing_subtitles: {cfg.use_existing_subtitles}")
     print(f"  update_existing_file: {cfg.output.update_existing_file}")
     print(f"  audio_update_mode: {cfg.output.audio_update_mode}")
     print(f"  audio_merge_mode: {cfg.audio_merge.mode}")
@@ -360,17 +357,6 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("00_rebuild_cleanup", log=info):
             rebuild_cleanup_safe(cfg)
 
-    use_existing_subtitles = bool(getattr(cfg, "use_existing_subtitles", False))
-    if use_existing_subtitles:
-        with timed_block("02_external_subtitles", log=info):
-            try:
-                subtitle_path = prepare_external_subtitles(cfg)
-            except (FileNotFoundError, ValueError) as exc:
-                raise SystemExit(str(exc)) from None
-            info(f"[dubpipeline] Using external subtitles file: {subtitle_path}")
-            if cfg.steps.asr_whisperx:
-                info("[dubpipeline] ASR step will be skipped: external subtitles mode is enabled.")
-
     def tts_and_align(c) -> None:
         with timed_block("04a_tts", log=info):
             step_tts.run(c)
@@ -379,7 +365,7 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
 
     steps: list[tuple[str, bool, Callable]] = [
         ("01_extract_audio", cfg.steps.extract_audio, step_extract_audio.run),
-        ("02_asr_whisperx", cfg.steps.asr_whisperx and not use_existing_subtitles, step_whisperx.run),
+        ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
         ("03_translate", cfg.steps.translate, step_translate.run),
         ("04_tts+align", cfg.steps.tts, tts_and_align),
         ("05_merge", cfg.steps.merge, step_merge_py.run),
@@ -441,7 +427,6 @@ def main() -> None:
 
     log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
     init_logger(log_path)
-    info(f"[dubpipeline] build: {get_build_info()}")
 
     for input_file in files:
         run_cfg = _build_cfg_for_input(cfg, input_file)
