@@ -39,57 +39,50 @@ STEP_ID_TO_INTERNAL = {
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dubpipeline",
-        description="DubPipeline: локальный пайплайн дубляжа видео",
+        description="DubPipeline CLI",
     )
-    parser.add_argument(
-        "command",
-        choices=["run"],
-        help="Команда запуска. Сейчас поддерживается только 'run'.",
-    )
-    parser.add_argument(
-        "pipeline_file",
-        help="Путь к файлу *.pipeline.yaml",
-    )
-    input_group = parser.add_mutually_exclusive_group()
-    input_group.add_argument("--in-file", default=None, metavar="PATH", help="Входной видеофайл.")
-    input_group.add_argument("--in-dir", default=None, metavar="PATH", help="Входная директория с видеофайлами.")
-    parser.add_argument(
-        "--set",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="Точечный override на этот запуск. Пример: --set tts.max_ru_chars=260",
-    )
-    parser.add_argument(
-        "--move-to-dir",
-        default=None,
-        help="Переместить выходные файлы в указанную директорию (переопределяет YAML/ENV).",
-    )
-    parser.add_argument("--recursive", action="store_true", help="Рекурсивный обход входной папки.")
-    parser.add_argument("--glob", default=None, metavar="PATTERN", help="Фильтр файлов по glob-шаблону.")
-    parser.add_argument("--out", default=None, metavar="DIR", help="Директория временных файлов (paths.out_dir).")
-    parser.add_argument("--lang-src", default=None, metavar="LANG", help="Язык источника.")
-    parser.add_argument("--lang-dst", default=None, metavar="LANG", help="Язык назначения.")
-    parser.add_argument(
-        "--steps",
-        default=None,
-        metavar="LIST",
-        help="Шаги: patch-форма (+asr,-tts) или list-форма (asr,translate,tts,merge).",
-    )
-    parser.add_argument("--usegpu", action="store_true", help="Принудительно использовать GPU.")
-    parser.add_argument("--cpu", action="store_true", help="Принудительно использовать CPU.")
-    parser.add_argument("--rebuild", action="store_true", help="Принудительно пересоздать артефакты шагов.")
-    parser.add_argument("--delete-temp", action="store_true", help="Удалять temp/work файлы по завершении.")
-    parser.add_argument("--keep-temp", action="store_true", help="Не удалять temp/work файлы по завершении.")
-    parser.add_argument("--merge-mode", default=None, metavar="MODE", help="Режим финального мержа (например, hq_ducking).")
-    parser.add_argument("--tts-gain-db", type=float, default=None, metavar="DB", help="Усиление TTS дорожки в dB.")
-    parser.add_argument("--original-gain-db", type=float, default=None, metavar="DB", help="Усиление оригинальной дорожки в dB.")
-    parser.add_argument("--ducking-amount-db", type=float, default=None, metavar="DB", help="Глубина ducking в dB.")
-    parser.add_argument("--ducking-threshold-db", type=float, default=None, metavar="DB", help="Порог sidechain compressor в dB.")
-    parser.add_argument("--ducking-attack-ms", type=int, default=None, metavar="MS", help="Attack sidechain compressor в ms.")
-    parser.add_argument("--ducking-release-ms", type=int, default=None, metavar="MS", help="Release sidechain compressor в ms.")
-    parser.add_argument("--no-loudnorm", action="store_true", help="Отключить loudnorm в режиме hq_ducking.")
-    parser.add_argument("--plan", action="store_true", help="Dry-run: показать план и завершить без выполнения.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    run_parser = subparsers.add_parser("run", help="Run the video pipeline.")
+    run_parser.add_argument("pipeline_file", help="Path to *.pipeline.yaml")
+    input_group = run_parser.add_mutually_exclusive_group()
+    input_group.add_argument("--in-file", default=None, metavar="PATH", help="Input video file.")
+    input_group.add_argument("--in-dir", default=None, metavar="PATH", help="Input directory with video files.")
+    run_parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override config value.")
+    run_parser.add_argument("--move-to-dir", default=None, help="Move outputs to the target directory.")
+    run_parser.add_argument("--recursive", action="store_true", help="Recursive scan for --in-dir.")
+    run_parser.add_argument("--glob", default=None, metavar="PATTERN", help="Glob filter for input files.")
+    run_parser.add_argument("--out", default=None, metavar="DIR", help="Override paths.out_dir.")
+    run_parser.add_argument("--lang-src", default=None, metavar="LANG", help="Source language.")
+    run_parser.add_argument("--lang-dst", default=None, metavar="LANG", help="Target language.")
+    run_parser.add_argument("--steps", default=None, metavar="LIST", help="Pipeline steps to enable or patch.")
+    run_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
+    run_parser.add_argument("--cpu", action="store_true", help="Force CPU.")
+    run_parser.add_argument("--rebuild", action="store_true", help="Rebuild intermediate artifacts.")
+    run_parser.add_argument("--delete-temp", action="store_true", help="Delete temp files after completion.")
+    run_parser.add_argument("--keep-temp", action="store_true", help="Keep temp files after completion.")
+    run_parser.add_argument("--merge-mode", default=None, metavar="MODE", help="Final merge mode.")
+    run_parser.add_argument("--tts-gain-db", type=float, default=None, metavar="DB", help="TTS gain in dB.")
+    run_parser.add_argument("--original-gain-db", type=float, default=None, metavar="DB", help="Original gain in dB.")
+    run_parser.add_argument("--ducking-amount-db", type=float, default=None, metavar="DB", help="Ducking amount in dB.")
+    run_parser.add_argument("--ducking-threshold-db", type=float, default=None, metavar="DB", help="Ducking threshold in dB.")
+    run_parser.add_argument("--ducking-attack-ms", type=int, default=None, metavar="MS", help="Ducking attack in ms.")
+    run_parser.add_argument("--ducking-release-ms", type=int, default=None, metavar="MS", help="Ducking release in ms.")
+    run_parser.add_argument("--no-loudnorm", action="store_true", help="Disable loudnorm.")
+    run_parser.add_argument("--plan", action="store_true", help="Dry-run mode.")
+
+    speak_parser = subparsers.add_parser("speak", help="Synthesize WAV from text.")
+    speak_input = speak_parser.add_mutually_exclusive_group(required=True)
+    speak_input.add_argument("--text", default=None, help="Inline text for synthesis.")
+    speak_input.add_argument("--text-file", default=None, metavar="PATH", help="Path to a text file.")
+    speak_parser.add_argument("--out-audio", required=True, metavar="PATH", help="Output WAV file.")
+    speak_parser.add_argument("--voice", default=None, metavar="VOICE", help="XTTS speaker id.")
+    speak_parser.add_argument("--speaker-wav", default=None, metavar="PATH", help="Reference WAV for voice cloning.")
+    speak_parser.add_argument("--lang", default="ru", metavar="LANG", help="Synthesis language.")
+    speak_parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override config value.")
+    speak_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
+    speak_parser.add_argument("--cpu", action="store_true", help="Force CPU.")
+    speak_parser.add_argument("--plan", action="store_true", help="Dry-run mode.")
     return parser
 
 
@@ -198,6 +191,107 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
                 cli_set.append(f"steps.{field}={'true' if enabled else 'false'}")
 
     return cli_set
+
+
+def _build_speak_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser, out_audio: Path) -> list[str]:
+    if args.usegpu and args.cpu:
+        parser.error("Cannot use --usegpu and --cpu together for speak")
+
+    cli_set = list(args.set)
+    cli_set.append(f"project_name={out_audio.stem}")
+    cli_set.append(f"paths.out_dir={out_audio.parent}")
+
+    if args.voice:
+        cli_set.append(f"tts.voice={args.voice}")
+    if args.usegpu:
+        cli_set.append("usegpu=true")
+    if args.cpu:
+        cli_set.append("usegpu=false")
+    if args.speaker_wav:
+        speaker_wav = Path(args.speaker_wav).expanduser()
+        if not speaker_wav.is_file():
+            parser.error(f"--speaker-wav must point to an existing file: '{speaker_wav}'")
+        cli_set.append(f"tts.speaker_wav={speaker_wav.resolve()}")
+
+    return cli_set
+
+
+def synthesize_text_to_wav(
+    *,
+    out_audio: Path,
+    text: str | None = None,
+    text_file: Path | None = None,
+    voice: str | None = None,
+    speaker_wav: Path | None = None,
+    lang: str = "ru",
+    use_gpu: bool | None = None,
+    cli_set: list[str] | None = None,
+    plan: bool = False,
+) -> list[Path]:
+    out_audio = out_audio.expanduser().resolve()
+    if not plan:
+        out_audio.parent.mkdir(parents=True, exist_ok=True)
+
+    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set or [], create_dirs=not plan)
+    cfg.project_name = out_audio.stem
+    cfg.paths.out_dir = out_audio.parent
+    cfg.paths.final_audio = out_audio
+    if voice:
+        cfg.tts.voice = voice
+    if speaker_wav:
+        cfg.tts.speaker_wav = str(speaker_wav.expanduser().resolve())
+    if use_gpu is not None:
+        cfg.usegpu = bool(use_gpu)
+
+    raw_text = load_text(text=text, text_file=text_file.expanduser().resolve() if text_file is not None else None)
+    normalized = normalize_text(raw_text)
+    segments = split_to_segments(normalized, max_chars=cfg.tts.text_max_chars)
+    if not segments:
+        raise ValueError("Input text is empty after normalization")
+
+    segments_dir = out_audio.parent / f"{out_audio.stem}_segments"
+    wavs = synthesize_segments_to_wavs(
+        segments,
+        cfg,
+        segments_dir,
+        voice=voice,
+        lang=lang,
+        speaker_wav=speaker_wav.expanduser().resolve() if speaker_wav is not None else None,
+        plan=plan,
+        show_progress=not plan,
+    )
+
+    if plan:
+        print(f"[dubpipeline][speak][plan] segments={len(wavs)} out_audio={out_audio}")
+        return wavs
+
+    if not wavs:
+        raise RuntimeError("TTS synthesis produced no audio segments")
+
+    concat_wavs(wavs, out_audio, gap_ms=cfg.tts.gap_ms, subtype="PCM_16")
+    info(f"[dubpipeline][speak] Output audio written to: {out_audio}")
+    return wavs
+
+
+def _run_speak(args: argparse.Namespace, parser: argparse.ArgumentParser | None = None) -> None:
+    if parser is None:
+        parser = build_parser()
+    out_audio = Path(args.out_audio).expanduser().resolve()
+    cli_set = _build_speak_cli_set(args, parser, out_audio)
+    speaker_wav = Path(args.speaker_wav).expanduser().resolve() if args.speaker_wav else None
+    text_file = Path(args.text_file).expanduser().resolve() if args.text_file else None
+
+    synthesize_text_to_wav(
+        out_audio=out_audio,
+        text=args.text,
+        text_file=text_file,
+        voice=args.voice,
+        speaker_wav=speaker_wav,
+        lang=args.lang,
+        use_gpu=(False if args.cpu else True if args.usegpu else None),
+        cli_set=cli_set,
+        plan=bool(args.plan),
+    )
 
 
 def _discover_input_files(cfg: PipelineConfig, *, recursive: bool, glob_pattern: str | None) -> list[Path]:
@@ -398,6 +492,10 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "speak":
+        _run_speak(args, parser)
+        return
 
     pipeline_path = Path(args.pipeline_file).expanduser().resolve()
     os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if args.keep_temp else "0"

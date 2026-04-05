@@ -34,3 +34,22 @@ def validate_input_path(path_value: str, *, is_dir_mode: bool) -> tuple[bool, st
     if not is_dir_mode and not input_path.is_file():
         return False, "В режиме 'Один файл' нужно указать видеофайл."
     return True, ""
+
+
+
+def validate_text_file_path(path_value: str) -> tuple[bool, str]:
+    text_path = Path(path_value.strip()).expanduser()
+    if not str(text_path):
+        return False, "Specify a text file path."
+    if not text_path.exists():
+        return False, "The specified text file does not exist."
+    if not text_path.is_file():
+        return False, "Audio mode requires a file path."
+    return True, ""
+
+
+def build_audio_output_path(text_path_value: str, out_dir_value: str, project_name_value: str) -> tuple[Path, str, str]:
+    text_path = Path(text_path_value.strip()).expanduser()
+    base_out = out_dir_value.strip() or str(text_path.parent)
+    project_name = project_name_value.strip() or text_path.stem
+    return Path(base_out).expanduser() / f"{project_name}.wav", project_name, base_out
