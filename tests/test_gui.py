@@ -4,12 +4,13 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from dubpipeline.cli import _build_cfg_for_input, _discover_input_files
 from dubpipeline.config import save_pipeline_yaml
 from dubpipeline.config import load_pipeline_config_ex
-from dubpipeline.input_mode import resolve_saved_input_state, validate_input_path
+from dubpipeline.input_mode import build_audio_output_path, resolve_saved_input_state, validate_input_path, validate_text_file_path
 from dubpipeline.steps import step_extract_audio
 from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
 
@@ -187,6 +188,37 @@ class GuiUnifiedInputTests(unittest.TestCase):
         )
         self.assertEqual(mode_dir, "dir")
         self.assertEqual(path_dir, "legacy-dir")
+
+    def test_validate_text_file_path_rejects_directory(self):
+        ok, msg = validate_text_file_path(str(TEST_DATA_DIR))
+        self.assertFalse(ok)
+        self.assertIn("file path", msg.lower())
+
+    def test_build_audio_output_path_uses_text_parent_and_stem(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text_file = Path(tmp) / "sample.txt"
+            text_file.write_text("hello", encoding="utf-8")
+            out_path, project_name, out_dir = build_audio_output_path(
+                str(text_file),
+                "",
+                "",
+            )
+            self.assertEqual(out_path, text_file.parent / "sample.wav")
+            self.assertEqual(out_dir, str(text_file.parent))
+            self.assertEqual(project_name, "sample")
+
+    def test_browse_text_file_uses_direct_file_dialog(self):
+        from dubpipeline.gui import browse_text_file
+
+        with patch("dubpipeline.gui.sg.popup_get_file", return_value="C:/tmp/sample.txt") as popup_get_file:
+            selected = browse_text_file()
+
+        self.assertEqual(selected, "C:/tmp/sample.txt")
+        popup_get_file.assert_called_once_with(
+            "Select text file",
+            file_types=(("Text files", "*.txt;*.md;*.text"), ("All files", "*.*")),
+            no_window=True,
+        )
 
 
 if __name__ == "__main__":

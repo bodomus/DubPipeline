@@ -27,7 +27,8 @@ class CliTests(unittest.TestCase):
         return case
 
     def test_help_contains_new_flags(self):
-        help_text = build_parser().format_help()
+        parser = build_parser()
+        run_help = parser._subparsers._group_actions[0].choices["run"].format_help()
         for flag in [
             "--in-file",
             "--in-dir",
@@ -52,7 +53,7 @@ class CliTests(unittest.TestCase):
             "--no-loudnorm",
             "--plan",
         ]:
-            self.assertIn(flag, help_text)
+            self.assertIn(flag, run_help)
 
     def test_steps_patch_and_list(self):
         parser = build_parser()

@@ -154,6 +154,27 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 - `tts` → `04_tts+align`
 - `merge` → `05_merge`
 
+## CLI `speak` (text -> WAV)
+
+```bash
+python -m dubpipeline.cli speak --text "Привет! Это тест озвучки." --out-audio out.wav --voice <voice_id>
+```
+
+```bash
+python -m dubpipeline.cli speak --text-file book.txt --out-audio book.wav
+```
+
+```bash
+python -m dubpipeline.cli speak --text-file chapter.txt --out-audio chapter.wav --speaker-wav sample.wav
+```
+
+Рекомендации:
+- Для больших книг лучше запускать по главам.
+- Управляйте длиной сегментов через `tts.text_max_chars` (по умолчанию 400).
+- Пауза между сегментами задаётся `tts.gap_ms`.
+- `--plan` строит только план сегментов и артефактов без загрузки модели.
+- На CPU качество/скорость хуже, для больших текстов предпочтительнее GPU.
+
 ## GUI: единый входной путь
 
 - В GUI используется один общий инпут `Input path` и переключатель режима `Один файл` / `Папка`.
