@@ -171,7 +171,7 @@ def run(cfg:PipelineConfig) -> None:
     #out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Video: {video}\n")
-    print(f"Audio (RU full): {audio}\n")
+    print(f"Audio (target full): {audio}\n")
     mux_mode = resolve_mux_mode(configured_mode)
     effective_output = video if update_existing else out_path
     print(f"Output: {effective_output}\n")
@@ -219,8 +219,8 @@ def run(cfg:PipelineConfig) -> None:
                     ffprobe=ffprobe_bin,
                     orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
                     orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
-                    ru_lang=getattr(getattr(cfg, "mux", None), "ru_lang", "rus"),
-                    ru_title=getattr(getattr(cfg, "mux", None), "ru_track_title", "Russian_Dub"),
+                    ru_lang=getattr(getattr(cfg, "mux", None), "target_lang", "rus"),
+                    ru_title=getattr(getattr(cfg, "mux", None), "target_track_title", "Russian_Dub"),
                 )
                 if replacer is not None:
                     replacer.replace_with_temp(video, mux_out_path, keep_backup=False)

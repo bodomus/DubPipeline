@@ -36,7 +36,7 @@ def _norm_text(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-def split_ru_text(text: str, max_len: int, breaks: Sequence[str] | None = None) -> list[str]:
+def split_target_text(text: str, max_len: int, breaks: Sequence[str] | None = None) -> list[str]:
     text = _norm_text(text)
     if breaks is None:
         breaks = [". ", "! ", "? ", "; ", ": ", " — ", ", "]
@@ -60,6 +60,9 @@ def split_ru_text(text: str, max_len: int, breaks: Sequence[str] | None = None) 
     if text:
         parts.append(text)
     return parts
+
+
+split_ru_text = split_target_text
 
 
 def _select_device(cfg: PipelineConfig, forced: str | None = None) -> str:
@@ -160,7 +163,7 @@ def _segment_stem(seg: dict, index: int) -> str:
 
 
 def _segment_text(seg: dict) -> str:
-    return _norm_text(str(seg.get("text") or seg.get("text_ru") or ""))
+    return _norm_text(str(seg.get("text_tgt") or seg.get("text_ru") or seg.get("text") or ""))
 
 
 def synthesize_segments_to_wavs(
@@ -176,7 +179,8 @@ def synthesize_segments_to_wavs(
     show_progress: bool = True,
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    language = (lang or "ru").strip() or "ru"
+    default_target_lang = (getattr(getattr(cfg, "languages", None), "tgt", "ru") or "ru").strip().lower() or "ru"
+    language = (lang or default_target_lang).strip().lower() or default_target_lang
     planned_paths: list[Path] = [out_dir / f"{_segment_stem(seg, i)}.wav" for i, seg in enumerate(segments) if _segment_text(seg)]
 
     if plan:
@@ -201,7 +205,7 @@ def synthesize_segments_to_wavs(
             continue
 
         out_wav = out_dir / f"{_segment_stem(seg, index)}.wav"
-        chunks = split_ru_text(text, max_len=cfg.tts.max_ru_chars, breaks=cfg.tts.breaks)
+        chunks = split_target_text(text, max_len=cfg.tts.max_target_chars, breaks=cfg.tts.breaks)
 
         if len(chunks) == 1:
             if speaker_wav_s and latents is not None:

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.models.catalog import (
@@ -13,8 +15,10 @@ from dubpipeline.models.catalog import (
     ModelStatus,
     build_model_choices,
     get_model_status,
+    is_unsupported_pair_reason,
     list_model_specs,
 )
+from dubpipeline.translation.service import ActiveModel, TranslationModelUnavailableError, TranslatorService
 from dubpipeline.steps import step_translate
 
 
@@ -110,7 +114,7 @@ class TranslationModelStatusTests(unittest.TestCase):
 
 class TranslationModelChoiceTests(unittest.TestCase):
     def test_choices_contain_enabled_and_disabled_flags_with_not_installed_marker(self):
-        def fake_status(model_id: str) -> ModelStatus:
+        def fake_status(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> ModelStatus:
             if model_id == "nllb_200_1_3b":
                 return ModelStatus(available=True, enabled=True, reason="")
             if model_id == "opus_mt":
@@ -137,67 +141,159 @@ class TranslationModelChoiceTests(unittest.TestCase):
         self.assertFalse(qwen_choice.supported)
         self.assertEqual(qwen_choice.installer, "none")
 
+    def test_pair_specific_model_choice_marks_unsupported_pair(self):
+        choices = build_model_choices("it", "ru")
+
+        argos_choice = next(choice for choice in choices if choice.model_id == "argos")
+        self.assertFalse(argos_choice.enabled)
+        self.assertIn("unsupported for it->ru", argos_choice.display)
+
+
+class TranslationPairStatusTests(unittest.TestCase):
+    def test_pair_specific_model_reports_unsupported_pair(self):
+        status = get_model_status("argos", src_lang="it", tgt_lang="ru")
+
+        self.assertFalse(status.available)
+        self.assertFalse(status.enabled)
+        self.assertTrue(is_unsupported_pair_reason(status.reason))
+
+    def test_translator_service_rejects_unsupported_pair_before_load(self):
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "it"
+        cfg.languages.tgt = "ru"
+        cfg.translation.model_id = "argos"
+
+        with self.assertRaises(TranslationModelUnavailableError) as ctx:
+            TranslatorService(cfg)
+
+        self.assertIn("unsupported for it->ru", str(ctx.exception))
+
+    def test_translator_service_reports_missing_pair_specific_model(self):
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "en"
+        cfg.languages.tgt = "de"
+        cfg.translation.model_id = "opus_mt"
+
+        with patch(
+            "dubpipeline.translation.service.get_model_status",
+            return_value=ModelStatus(available=False, enabled=False, reason="not installed"),
+        ):
+            with self.assertRaises(TranslationModelUnavailableError) as ctx:
+                TranslatorService(cfg)
+
+        message = str(ctx.exception)
+        self.assertIn("OPUS-MT", message)
+        self.assertIn("en->de", message)
+        self.assertIn("Open Models -> Install", message)
+
+    def test_translator_cache_scope_includes_language_pair(self):
+        def make_service(src_lang: str, tgt_lang: str) -> TranslatorService:
+            cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+            cfg.languages.src = src_lang
+            cfg.languages.tgt = tgt_lang
+
+            service = TranslatorService.__new__(TranslatorService)
+            service._cfg = cfg
+            service._active = ActiveModel(
+                model_id="nllb_200_1_3b",
+                label="Meta NLLB-200 (1.3B)",
+                backend="nllb",
+                model_ref="facebook/nllb-200-1.3B",
+            )
+            service._hf_cache_key = None
+            return service
+
+        en_ru_scope = make_service("en", "ru").cache_scope
+        en_de_scope = make_service("en", "de").cache_scope
+
+        self.assertIn("en->ru", en_ru_scope)
+        self.assertIn("en->de", en_de_scope)
+        self.assertNotEqual(en_ru_scope, en_de_scope)
+
 
 class TranslationStepIntegrationTests(unittest.TestCase):
+    @staticmethod
+    def _case_dir(prefix: str) -> Path:
+        root = Path("tests/.tmp_runtime")
+        root.mkdir(parents=True, exist_ok=True)
+        case = root / f"{prefix}_{uuid4().hex}"
+        case.mkdir(parents=True, exist_ok=True)
+        return case
+
     def test_translate_step_uses_translation_model_from_config(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            seg_path = root / "segments.json"
-            out_path = root / "segments.ru.json"
-            seg_path.write_text(
-                json.dumps(
-                    [
-                        {"start": 0.0, "end": 1.0, "text": "Hello"},
-                        {"start": 1.0, "end": 2.0, "text": "World"},
-                    ],
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
+        root = self._case_dir("translation_step")
+        seg_path = root / "segments.json"
+        out_path = root / "segments.ru.json"
+        seg_path.write_text(
+            json.dumps(
+                [
+                    {"start": 0.0, "end": 1.0, "text": "Hello"},
+                    {"start": 1.0, "end": 2.0, "text": "World"},
+                ],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        cfg = PipelineConfig(project_name="sample", project_dir=root)
+        cfg.paths.segments_file = seg_path
+        cfg.paths.segments_tgt_file = out_path
+        cfg.translation.model_id = "opus_mt"
+        cfg.translation.backend = "opus_mt"
+        cfg.translation.model_ref = "Helsinki-NLP/opus-mt-en-ru"
+        cfg.translate.release_vram = False
+
+        captured: dict[str, str] = {}
+
+        class FakeTranslator:
+            model_label = "OPUS-MT (Helsinki-NLP)"
+            model_id = "opus_mt"
+            backend = "opus_mt"
+            cache_scope = "opus_mt|opus_mt"
+
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+                self.release_called = False
+
+            def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
+                self.calls.append(list(texts))
+                return [f"RU:{t}" for t in texts]
+
+            def release(self) -> None:
+                self.release_called = True
+
+        fake_translator = FakeTranslator()
+
+        def fake_from_config(runtime_cfg: PipelineConfig) -> FakeTranslator:
+            captured["model_id"] = runtime_cfg.translation.model_id
+            return fake_translator
+
+        def in_memory_cache(_db_path):
+            con = sqlite3.connect(":memory:")
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS translations (
+                    k TEXT PRIMARY KEY,
+                    v TEXT NOT NULL
+                )
+                """
             )
+            return con
 
-            cfg = PipelineConfig(project_name="sample", project_dir=root)
-            cfg.paths.segments_file = seg_path
-            cfg.paths.segments_ru_file = out_path
-            cfg.translation.model_id = "opus_mt"
-            cfg.translation.backend = "opus_mt"
-            cfg.translation.model_ref = "Helsinki-NLP/opus-mt-en-ru"
-            cfg.translate.release_vram = False
+        with (
+            patch("dubpipeline.steps.step_translate.TranslatorService.from_config", side_effect=fake_from_config),
+            patch("dubpipeline.steps.step_translate._open_cache", side_effect=in_memory_cache),
+        ):
+            step_translate.run(cfg)
 
-            captured: dict[str, str] = {}
+        self.assertEqual(captured.get("model_id"), "opus_mt")
+        self.assertEqual(fake_translator.calls, [["Hello", "World"]])
 
-            class FakeTranslator:
-                model_label = "OPUS-MT (Helsinki-NLP)"
-                model_id = "opus_mt"
-                backend = "opus_mt"
-                cache_scope = "opus_mt|opus_mt"
-
-                def __init__(self) -> None:
-                    self.calls: list[list[str]] = []
-                    self.release_called = False
-
-                def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
-                    self.calls.append(list(texts))
-                    return [f"RU:{t}" for t in texts]
-
-                def release(self) -> None:
-                    self.release_called = True
-
-            fake_translator = FakeTranslator()
-
-            def fake_from_config(runtime_cfg: PipelineConfig) -> FakeTranslator:
-                captured["model_id"] = runtime_cfg.translation.model_id
-                return fake_translator
-
-            with patch("dubpipeline.steps.step_translate.TranslatorService.from_config", side_effect=fake_from_config):
-                step_translate.run(cfg)
-
-            self.assertEqual(captured.get("model_id"), "opus_mt")
-            self.assertEqual(fake_translator.calls, [["Hello", "World"]])
-
-            with out_path.open("r", encoding="utf-8") as f:
-                translated = json.load(f)
-            self.assertEqual([item["text_ru"] for item in translated], ["RU:Hello", "RU:World"])
+        with out_path.open("r", encoding="utf-8") as f:
+            translated = json.load(f)
+        self.assertEqual([item["text_tgt"] for item in translated], ["RU:Hello", "RU:World"])
+        self.assertEqual([item["text_ru"] for item in translated], ["RU:Hello", "RU:World"])
 
 
 if __name__ == "__main__":

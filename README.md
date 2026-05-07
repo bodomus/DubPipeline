@@ -181,3 +181,34 @@ python -m dubpipeline.cli speak --text-file chapter.txt --out-audio chapter.wav 
 - Режим `Один файл` трактует `Input path` как путь к видеофайлу.
 - Режим `Папка` трактует `Input path` как путь к директории с видео.
 - Кнопка `Browse...` открывает файловый или папочный диалог в зависимости от выбранного режима.
+
+## Multilingual Translation
+
+- Public language selection in the current GUI/CLI flow is supported for `de`, `fr`, `es`, `ru`.
+- GUI now has explicit `source -> target` language selectors.
+- CLI overrides are available through `--lang-src <code>` and `--lang-dst <code>`.
+- If the `Translate` step is enabled, `source` and `target` must be different.
+- Translation model availability is resolved per language pair, so a model may be available for one pair and unavailable for another.
+- Legacy YAML with `en` can still be loaded for backward compatibility, but new GUI/CLI selection is intentionally limited to `de/fr/es/ru`.
+
+## Target-Aware Outputs
+
+- Translated segments are written to `*.segments.{target_lang}.json`.
+- TTS segment folders are written to `segments/tts_{target_lang}_segments` and `segments/tts_{target_lang}_segments_aligned`.
+- Final muxed video is written to `*.{target_lang}.muxed.mp4`.
+- Final audio track metadata is derived from the selected target language:
+  - `de -> deu / German (DubPipeline)`
+  - `fr -> fra / French (DubPipeline)`
+  - `es -> spa / Spanish (DubPipeline)`
+  - `ru -> rus / Russian (DubPipeline)`
+
+## Task Handoff
+
+After each YouTrack task, save handoff context in a comment using this template:
+
+- What was done
+- Files changed
+- Decisions taken
+- What remains
+- Risks / limitations
+- Next step

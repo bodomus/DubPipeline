@@ -17,7 +17,14 @@ from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
 from dubpipeline.utils.run_meta import log_run_header
 from dubpipeline.utils.timing import timed_block, timed_run
-from .config import PipelineConfig, load_pipeline_config_ex, pipeline_path
+from .config import (
+    PipelineConfig,
+    SUPPORTED_TRANSLATION_LANGUAGES,
+    load_pipeline_config_ex,
+    normalize_language_code,
+    pipeline_path,
+    validate_translation_language_pair,
+)
 
 STEP_ID_TO_CFG_FIELD = {
     "extract_audio": "extract_audio",
@@ -42,6 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="DubPipeline CLI",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    supported_langs_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
 
     run_parser = subparsers.add_parser("run", help="Run the video pipeline.")
     run_parser.add_argument("pipeline_file", help="Path to *.pipeline.yaml")
@@ -53,8 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--recursive", action="store_true", help="Recursive scan for --in-dir.")
     run_parser.add_argument("--glob", default=None, metavar="PATTERN", help="Glob filter for input files.")
     run_parser.add_argument("--out", default=None, metavar="DIR", help="Override paths.out_dir.")
-    run_parser.add_argument("--lang-src", default=None, metavar="LANG", help="Source language.")
-    run_parser.add_argument("--lang-dst", default=None, metavar="LANG", help="Target language.")
+    run_parser.add_argument(
+        "--lang-src",
+        default=None,
+        metavar="LANG",
+        help=f"Source language. Supported values: {supported_langs_text}.",
+    )
+    run_parser.add_argument(
+        "--lang-dst",
+        default=None,
+        metavar="LANG",
+        help=f"Target language. Supported values: {supported_langs_text}.",
+    )
     run_parser.add_argument("--steps", default=None, metavar="LIST", help="Pipeline steps to enable or patch.")
     run_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
     run_parser.add_argument("--cpu", action="store_true", help="Force CPU.")
@@ -125,14 +143,21 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         parser.error("Нельзя одновременно указывать --delete-temp и --keep-temp")
 
     cli_set = list(args.set)
+    supported_langs_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
     if args.move_to_dir is not None:
         cli_set.append(f"output.move_to_dir={args.move_to_dir}")
     if args.out is not None:
         cli_set.append(f"paths.out_dir={args.out}")
     if args.lang_src is not None:
-        cli_set.append(f"languages.src={args.lang_src}")
+        src_lang = normalize_language_code(args.lang_src, default="")
+        if src_lang not in SUPPORTED_TRANSLATION_LANGUAGES:
+            parser.error(f"--lang-src must be one of: {supported_langs_text}")
+        cli_set.append(f"languages.src={src_lang}")
     if args.lang_dst is not None:
-        cli_set.append(f"languages.tgt={args.lang_dst}")
+        tgt_lang = normalize_language_code(args.lang_dst, default="")
+        if tgt_lang not in SUPPORTED_TRANSLATION_LANGUAGES:
+            parser.error(f"--lang-dst must be one of: {supported_langs_text}")
+        cli_set.append(f"languages.tgt={tgt_lang}")
     if args.usegpu:
         cli_set.append("usegpu=true")
     if args.cpu:
@@ -372,19 +397,36 @@ def _detect_input_source(args: argparse.Namespace) -> str:
     return "CLI" if args.in_file or args.in_dir else "YAML/ENV/default"
 
 
+def _validate_run_language_pair(
+    cfg: PipelineConfig,
+    parser: argparse.ArgumentParser,
+    *,
+    allow_legacy: bool,
+) -> None:
+    message = validate_translation_language_pair(
+        cfg.languages.src,
+        cfg.languages.tgt,
+        translate_enabled=bool(cfg.steps.translate),
+        allow_legacy=allow_legacy,
+    )
+    if message:
+        parser.error(message)
+
+
 def _build_cfg_for_input(base_cfg: PipelineConfig, input_file: Path) -> PipelineConfig:
     cfg = copy.deepcopy(base_cfg)
     cfg.project_name = input_file.stem
     cfg.paths.input_video = input_file.resolve()
+    target_lang = (cfg.languages.tgt or "ru").strip().lower() or "ru"
 
     out_dir = Path(cfg.paths.out_dir)
     cfg.paths.audio_wav = out_dir / f"{cfg.project_name}.wav"
     cfg.paths.segments_file = out_dir / f"{cfg.project_name}.segments.json"
-    cfg.paths.segments_ru_file = out_dir / f"{cfg.project_name}.segments.ru.json"
+    cfg.paths.segments_tgt_file = out_dir / f"{cfg.project_name}.segments.{target_lang}.json"
     cfg.paths.srt_file_en = out_dir / f"{cfg.project_name}.srt"
-    cfg.paths.tts_segments_dir = out_dir / "segments" / "tts_ru_segments"
-    cfg.paths.tts_segments_aligned_dir = out_dir / "segments" / "tts_ru_segments_aligned"
-    cfg.paths.final_video = out_dir / f"{cfg.project_name}.ru.muxed.mp4"
+    cfg.paths.tts_segments_dir = out_dir / "segments" / f"tts_{target_lang}_segments"
+    cfg.paths.tts_segments_aligned_dir = out_dir / "segments" / f"tts_{target_lang}_segments_aligned"
+    cfg.paths.final_video = out_dir / f"{cfg.project_name}.{target_lang}.muxed.mp4"
     return cfg
 
 
@@ -430,6 +472,7 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
 @timed_run(log=info, run_name="RUN", top_n=50)
 def run_pipeline(cfg, pipeline_path: Path) -> None:
     from dubpipeline.steps import step_align, step_merge_py, step_translate, step_tts, step_whisperx
+    from dubpipeline.translation.service import TranslationModelError, TranslatorService
     from .steps import step_extract_audio
 
     Const.bind(cfg)
@@ -444,6 +487,12 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         asr_model=cfg.whisperx.model_name,
         batch_size=cfg.whisperx.batch_size,
     )
+
+    if cfg.steps.translate:
+        try:
+            TranslatorService.from_config(cfg)
+        except TranslationModelError as exc:
+            raise SystemExit(str(exc)) from None
 
     success = False
 
@@ -502,6 +551,11 @@ def main() -> None:
     cli_set = _build_cli_set(args, parser)
 
     cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set, create_dirs=not args.plan)
+    _validate_run_language_pair(
+        cfg,
+        parser,
+        allow_legacy=(args.lang_src is None and args.lang_dst is None),
+    )
     if not args.plan:
         Path(cfg.paths.out_dir).mkdir(parents=True, exist_ok=True)
 

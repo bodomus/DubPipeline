@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING
 
 from dubpipeline.models.catalog import (
     get_model_install_dir,
-    get_model_spec,
     get_model_status,
+    is_unsupported_pair_reason,
+    resolve_model_spec,
 )
 from dubpipeline.models.storage import configure_argos_packages_dir, get_argos_packages_dir
 
@@ -30,6 +31,14 @@ _NLLB_LANG_MAP = {
     "uk": "ukr_Cyrl",
     "pl": "pol_Latn",
 }
+
+
+def model_not_installed_message(model_label: str, src_lang: str, tgt_lang: str) -> str:
+    pair = f"{src_lang}->{tgt_lang}"
+    return (
+        f"Translation model '{model_label}' for {pair} is not installed. "
+        "Cannot continue translation. Open Models -> Install to download it."
+    )
 
 
 class TranslationModelError(RuntimeError):
@@ -116,11 +125,18 @@ class TranslatorService:
 
     @property
     def cache_scope(self) -> str:
-        return f"{self.backend}|{self.model_id}"
+        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
+        return f"{self.backend}|{self.model_id}|{src_lang}->{tgt_lang}"
 
     @classmethod
     def from_config(cls, cfg: "PipelineConfig") -> "TranslatorService":
         return cls(cfg)
+
+    def _model_not_installed_message(self) -> str:
+        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
+        return model_not_installed_message(self._active.label, src_lang, tgt_lang)
 
     def _resolve_active_model(self, cfg: "PipelineConfig") -> ActiveModel:
         model_id = (cfg.translation.model_id or "").strip()
@@ -128,20 +144,25 @@ class TranslatorService:
             raise TranslationModelUnavailableError(
                 "Translation model is not configured. Please choose a model in Models..."
             )
-
-        spec = get_model_spec(model_id)
-        status = get_model_status(model_id)
+        src_lang = (cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (cfg.languages.tgt or "ru").strip().lower() or "ru"
+        spec = resolve_model_spec(model_id, src_lang, tgt_lang)
+        status = get_model_status(model_id, src_lang, tgt_lang)
         if not spec.supported:
             raise TranslationModelUnavailableError(
                 "Model is planned and not supported yet"
             )
+        if is_unsupported_pair_reason(status.reason):
+            raise TranslationModelUnavailableError(
+                f"Model '{spec.label}' is {status.reason}. Please choose another model in Models..."
+            )
         if not status.available:
             raise TranslationModelUnavailableError(
-                "Model not installed: open Models -> Install"
+                model_not_installed_message(spec.label, src_lang, tgt_lang)
             )
 
         local_dir = ""
-        model_dir = get_model_install_dir(spec.id)
+        model_dir = get_model_install_dir(spec.id, src_lang, tgt_lang)
         if spec.installer == "hf_snapshot" and model_dir is not None and model_dir.exists():
             local_dir = str(model_dir)
 
@@ -203,7 +224,7 @@ class TranslatorService:
         model_ref = self._active.local_dir or self._active.model_ref
         if self._active.local_dir and not Path(self._active.local_dir).exists():
             raise TranslationModelUnavailableError(
-                "Model not installed: open Models -> Install"
+                self._model_not_installed_message()
             )
         device = self._device()
         cache_key = (device, model_ref)
@@ -241,7 +262,7 @@ class TranslatorService:
                     **load_kwargs,
                 )
             except Exception as exc:
-                raise TranslationModelUnavailableError("Model not installed: open Models -> Install") from exc
+                raise TranslationModelUnavailableError(self._model_not_installed_message()) from exc
 
         model.eval()
         model.to(device)
@@ -346,7 +367,7 @@ class TranslatorService:
             from argostranslate import package, translate
         except Exception as exc:
             raise TranslationModelUnavailableError(
-                "Model not installed: open Models -> Install"
+                self._model_not_installed_message()
             ) from exc
 
         installed = package.get_installed_packages(path=get_argos_packages_dir(create=True))
@@ -354,7 +375,7 @@ class TranslatorService:
             getattr(pkg, "from_code", None) == src_lang and getattr(pkg, "to_code", None) == tgt_lang
             for pkg in installed
         ):
-            raise TranslationModelUnavailableError("Model not installed: open Models -> Install")
+            raise TranslationModelUnavailableError(self._model_not_installed_message())
 
         out: list[str] = []
         for src in texts:

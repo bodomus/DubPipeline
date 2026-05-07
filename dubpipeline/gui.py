@@ -13,18 +13,30 @@ import time
 import shutil
 
 from dubpipeline.cli import synthesize_text_to_wav
-from dubpipeline.config import save_pipeline_yaml, get_voice, normalize_audio_update_mode, load_pipeline_config_ex, pipeline_path
+from dubpipeline.config import (
+    SUPPORTED_TRANSLATION_LANGUAGES,
+    get_voice,
+    load_pipeline_config_ex,
+    normalize_audio_update_mode,
+    normalize_language_code,
+    pipeline_path,
+    save_pipeline_yaml,
+    validate_translation_language_pair,
+)
 from dubpipeline.models.catalog import (
     NOT_SUPPORTED_REASON,
     build_model_choices,
     get_model_spec,
     get_model_status,
+    is_unsupported_pair_reason,
     legacy_translate_backend_for_model,
+    resolve_model_spec,
 )
 from dubpipeline.models.installer import (
     ModelInstallStatus,
     get_model_installer,
 )
+from dubpipeline.translation.service import model_not_installed_message
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 
 from dubpipeline.utils.build_info import get_build_info
@@ -34,7 +46,16 @@ from dubpipeline.input_mode import build_audio_output_path, resolve_saved_input_
 from dubpipeline.external_subtitles import find_external_subtitle_for_video, missing_subtitles_error
 
 
-def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_text: str, out_file: str, use_gpu: bool) -> None:
+def _preview_worker_target(
+    q: Queue,
+    *,
+    model_name: str,
+    voice_id: str,
+    preview_text: str,
+    out_file: str,
+    use_gpu: bool,
+    lang: str,
+) -> None:
     """Worker for TTS preview. Must be top-level for Windows multiprocessing (spawn/pickle)."""
     try:
         out_path = Path(out_file)
@@ -45,6 +66,7 @@ def _preview_worker_target(q: Queue, *, model_name: str, voice_id: str, preview_
             preview_text=preview_text,
             out_file=out_path,
             use_gpu=use_gpu,
+            lang=lang,
         )
         q.put({"ok": True, "file": str(out_path)})
     except Exception as ex:
@@ -196,7 +218,16 @@ class PreviewController:
                 self._player.kill()
         self._player = None
 
-    def start_preview(self, *, model_name: str, voice_id: str, preview_text: str, use_gpu: bool, window) -> None:
+    def start_preview(
+        self,
+        *,
+        model_name: str,
+        voice_id: str,
+        preview_text: str,
+        use_gpu: bool,
+        lang: str,
+        window,
+    ) -> None:
         self.stop()
         out_dir = Path(tempfile.gettempdir()) / "dubpipeline_preview"
         out_file = out_dir / f"preview_{int(time.time() * 1000)}.wav"
@@ -213,6 +244,7 @@ class PreviewController:
                 "preview_text": preview_text,
                 "out_file": str(out_file),
                 "use_gpu": use_gpu,
+                "lang": lang,
             },
             daemon=True,
         )
@@ -423,6 +455,49 @@ def steps_summary(steps_dict: dict) -> str:
     return f"Steps: {', '.join(enabled)}"
 
 
+def _persist_base_cfg() -> None:
+    with TEMPLATE_PATH.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
+
+
+def _current_base_languages() -> tuple[str, str]:
+    languages = BASE_CFG.get("languages") or {}
+    src_lang = normalize_language_code(languages.get("src", "en"), default="en")
+    tgt_lang = normalize_language_code(languages.get("tgt", "ru"), default="ru")
+    return src_lang, tgt_lang
+
+
+def _language_choices(current_lang: str) -> list[str]:
+    choices = list(SUPPORTED_TRANSLATION_LANGUAGES)
+    if current_lang and current_lang not in choices:
+        choices.insert(0, current_lang)
+    return choices
+
+
+def _language_pair_summary(src_lang: str, tgt_lang: str, *, translate_enabled: bool) -> tuple[str, str]:
+    validation_error = validate_translation_language_pair(
+        src_lang,
+        tgt_lang,
+        translate_enabled=translate_enabled,
+        allow_legacy=True,
+    )
+    if validation_error:
+        return f"Language pair: {src_lang} -> {tgt_lang} ({validation_error})", "firebrick"
+
+    legacy_codes = [
+        code
+        for code in (src_lang, tgt_lang)
+        if code not in SUPPORTED_TRANSLATION_LANGUAGES
+    ]
+    if legacy_codes:
+        return (
+            f"Language pair: {src_lang} -> {tgt_lang} (legacy config value; new UI supports "
+            f"{', '.join(SUPPORTED_TRANSLATION_LANGUAGES)})",
+            "darkorange3",
+        )
+    return f"Language pair: {src_lang} -> {tgt_lang}", "gray35"
+
+
 def show_steps_modal(parent, current_steps: dict) -> dict:
     steps = normalize_steps(current_steps)
     layout = [[sg.Text("Select generation steps:")]]
@@ -453,16 +528,20 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
     return result
 
 
-def _translation_summary(model_id: str) -> tuple[str, str]:
+def _translation_summary(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> tuple[str, str]:
+    if src_lang is None or tgt_lang is None:
+        src_lang, tgt_lang = _current_base_languages()
     try:
-        spec = get_model_spec(model_id)
-        status = get_model_status(model_id)
-        install_status = get_model_installer().get_status(model_id)
+        spec = resolve_model_spec(model_id, src_lang, tgt_lang)
+        status = get_model_status(model_id, src_lang, tgt_lang)
+        install_status = get_model_installer().get_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
     except Exception:
         return "Machine Translation: unknown model", "firebrick"
 
     if not spec.supported or status.reason == NOT_SUPPORTED_REASON:
         return f"Machine Translation: {spec.label} (planned)", "gray45"
+    if is_unsupported_pair_reason(status.reason):
+        return f"Machine Translation: {spec.label} ({status.reason})", "gray45"
     if install_status.status == "failed":
         reason = (install_status.error or install_status.message or "install failed").strip()
         if len(reason) > 64:
@@ -473,8 +552,84 @@ def _translation_summary(model_id: str) -> tuple[str, str]:
     return f"Machine Translation: {spec.label} (not installed)", "gray35"
 
 
-def persist_translation_model(model_id: str) -> None:
-    spec = get_model_spec(model_id)
+def ensure_translation_model_ready_for_start(
+    window,
+    model_id: str,
+    *,
+    src_lang: str,
+    tgt_lang: str,
+) -> str | None:
+    model_id = (model_id or "").strip()
+    if not model_id:
+        msg = "Translation model is not configured. Open Models and choose an installed model."
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
+    try:
+        spec = resolve_model_spec(model_id, src_lang, tgt_lang)
+        status = get_model_status(model_id, src_lang, tgt_lang)
+    except Exception as exc:
+        msg = f"Translation model cannot be checked: {exc}"
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
+    if status.enabled:
+        return model_id
+
+    if not spec.supported or status.reason == NOT_SUPPORTED_REASON:
+        msg = f"Translation model '{spec.label}' is planned and not supported yet. Choose another model in Models."
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
+    if is_unsupported_pair_reason(status.reason):
+        msg = f"Translation model '{spec.label}' is {status.reason}. Choose another model in Models."
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
+    msg = model_not_installed_message(spec.label, src_lang, tgt_lang)
+    _emit_info(window, msg)
+    answer = sg.popup_yes_no(
+        f"{msg}\n\nOpen Models to install it now?",
+        title="Translation model required",
+        keep_on_top=True,
+    )
+    if answer != "Yes":
+        return None
+
+    selected_model_id = show_models_modal(
+        window,
+        model_id,
+        src_lang=src_lang,
+        tgt_lang=tgt_lang,
+    )
+    if not selected_model_id:
+        return None
+
+    persist_languages(src_lang, tgt_lang)
+    persist_translation_model(selected_model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+    window["-TRANSLATION_MODEL_ID-"].update(selected_model_id)
+    summary_text, summary_color = _translation_summary(selected_model_id, src_lang, tgt_lang)
+    window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
+    selected_spec = get_model_spec(selected_model_id)
+    _emit_info(window, f"Translation model selected: {selected_spec.label} [{selected_spec.id}]")
+    return selected_model_id
+
+
+def persist_languages(src_lang: str, tgt_lang: str) -> None:
+    BASE_CFG.setdefault("languages", {})
+    BASE_CFG["languages"]["src"] = normalize_language_code(src_lang, default="en")
+    BASE_CFG["languages"]["tgt"] = normalize_language_code(tgt_lang, default="ru")
+    _persist_base_cfg()
+
+
+def persist_translation_model(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> None:
+    if src_lang is None or tgt_lang is None:
+        src_lang, tgt_lang = _current_base_languages()
+    spec = resolve_model_spec(model_id, src_lang, tgt_lang)
     BASE_CFG.setdefault("translation", {})
     BASE_CFG["translation"]["model_id"] = spec.id
     BASE_CFG["translation"]["backend"] = spec.backend
@@ -485,14 +640,12 @@ def persist_translation_model(model_id: str) -> None:
     BASE_CFG["translate"]["backend"] = legacy_translate_backend_for_model(spec)
     if BASE_CFG["translate"]["backend"] == "hf":
         BASE_CFG["translate"]["hf_model"] = spec.model_ref
-
-    with TEMPLATE_PATH.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
+    _persist_base_cfg()
 
 
-def show_models_modal(parent, current_model_id: str) -> str | None:
+def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang: str) -> str | None:
     installer = get_model_installer()
-    choices = build_model_choices()
+    choices = build_model_choices(src_lang, tgt_lang)
     displays = [item.display for item in choices]
     by_display = {item.display: item for item in choices}
 
@@ -604,12 +757,25 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
             selected_model_id = None
             return
 
-        spec = get_model_spec(choice.model_id)
-        install_status = installer.get_status(choice.model_id)
+        spec = resolve_model_spec(choice.model_id, src_lang, tgt_lang)
+        install_status = installer.get_status(choice.model_id, src_lang=src_lang, tgt_lang=tgt_lang)
 
         if not spec.supported:
             window["-MODELS_STATUS-"].update(
                 "Not supported yet (planned). Install is unavailable.",
+                text_color="gray45",
+            )
+            window["-MODELS_PROGRESS-"].update_bar(0)
+            window["-MODELS_INSTALL-"].update(disabled=True)
+            window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
+            window["-MODELS_APPLY-"].update(disabled=True)
+            selected_model_id = None
+            return
+
+        status = get_model_status(choice.model_id, src_lang, tgt_lang)
+        if is_unsupported_pair_reason(status.reason):
+            window["-MODELS_STATUS-"].update(
+                f"Model is {status.reason}. Install and apply are unavailable for this language pair.",
                 text_color="gray45",
             )
             window["-MODELS_PROGRESS-"].update_bar(0)
@@ -644,7 +810,6 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
             selected_model_id = None
             return
 
-        status = get_model_status(choice.model_id)
         if status.enabled and install_status.status == "installed":
             window["-MODELS_STATUS-"].update("Model is installed and ready.", text_color="darkgreen")
             window["-MODELS_PROGRESS-"].update_bar(100)
@@ -666,7 +831,7 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
 
     def _refresh_choices(target_model_id: str | None = None) -> None:
         nonlocal choices, displays, by_display
-        choices = build_model_choices()
+        choices = build_model_choices(src_lang, tgt_lang)
         displays = [item.display for item in choices]
         by_display = {item.display: item for item in choices}
         window["-MODELS_MT-"].update(values=displays)
@@ -701,7 +866,11 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
             _update_state(values.get("-MODELS_MT-", ""))
         if event == "__TIMEOUT__":
             if active_download_model_id:
-                status = installer.get_status(active_download_model_id)
+                status = installer.get_status(
+                    active_download_model_id,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                )
                 if status.status != "downloading":
                     active_download_model_id = None
                 _update_state(values.get("-MODELS_MT-", ""))
@@ -718,7 +887,12 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
                 window.write_event_value("-MODELS_INSTALL_PROGRESS-", status)
 
             def _worker() -> None:
-                install_result = installer.install(model_id, progress_cb=_progress_callback)
+                install_result = installer.install(
+                    model_id,
+                    src_lang=src_lang,
+                    tgt_lang=tgt_lang,
+                    progress_cb=_progress_callback,
+                )
                 window.write_event_value("-MODELS_INSTALL_DONE-", install_result)
 
             threading.Thread(target=_worker, daemon=True).start()
@@ -730,7 +904,7 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
                 if choice and choice.model_id:
                     model_id = choice.model_id
             if model_id:
-                installer.cancel(model_id)
+                installer.cancel(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         if event == "-MODELS_INSTALL_PROGRESS-":
             progress = values.get("-MODELS_INSTALL_PROGRESS-")
             if isinstance(progress, ModelInstallStatus):
@@ -764,8 +938,7 @@ def show_models_modal(parent, current_model_id: str) -> str | None:
 def persist_move_to_dir(path: str) -> None:
     BASE_CFG.setdefault("output", {})
     BASE_CFG["output"]["move_to_dir"] = path
-    with TEMPLATE_PATH.open("w", encoding="utf-8") as f:
-        yaml.safe_dump(BASE_CFG, f, allow_unicode=True, sort_keys=False)
+    _persist_base_cfg()
 
 
 def set_source_mode(window, is_dir: bool) -> None:
@@ -775,8 +948,8 @@ def set_source_mode(window, is_dir: bool) -> None:
 
 def browse_input_path(*, is_dir_mode: bool, video_file_types):
     if is_dir_mode:
-        return sg.popup_get_folder("Select folder with videos")
-    return sg.popup_get_file("Select video file", file_types=video_file_types)
+        return sg.popup_get_folder("Select folder with videos", no_window=True)
+    return sg.popup_get_file("Select video file", file_types=video_file_types, no_window=True)
 
 
 
@@ -1019,12 +1192,31 @@ def handle_audio_start_event(values, window, voice_id: str) -> bool:
     return True
 
 
+def _validate_gui_language_pair(values, current_steps: dict) -> tuple[bool, str]:
+    src_lang = normalize_language_code(values.get("-LANG_SRC-", "en"), default="en")
+    tgt_lang = normalize_language_code(values.get("-LANG_DST-", "ru"), default="ru")
+    validation_error = validate_translation_language_pair(
+        src_lang,
+        tgt_lang,
+        translate_enabled=bool(current_steps.get("translate", False)),
+        allow_legacy=True,
+    )
+    if validation_error:
+        return False, validation_error
+    return True, ""
+
+
 def handle_start_event(values, current_steps, video_exts, window, voice_id_by_display, progress_state: dict):
     active_tab = values.get("-MAIN_TABS-", TAB_VIDEO)
     if active_tab == TAB_AUDIO:
         selected_display = values.get("-VOICE-", "")
         selected_voice_id = voice_id_by_display.get(selected_display, selected_display)
         return 1 if handle_audio_start_event(values, window, selected_voice_id) else 0
+
+    lang_ok, lang_error = _validate_gui_language_pair(values, current_steps)
+    if not lang_ok:
+        sg.popup_error(lang_error)
+        return 0
 
     if bool(values.get("-SRC_DIR-")):
         run_items, run_count = _prepare_folder_run(values, current_steps, video_exts, window)
@@ -1099,12 +1291,16 @@ def main():
             ((BASE_CFG.get("translation") or {}).get("model_id", ""))
         ).strip()
     if not current_translation_model_id:
-        for choice in build_model_choices():
+        base_src_lang, base_tgt_lang = _current_base_languages()
+        for choice in build_model_choices(base_src_lang, base_tgt_lang):
             if choice.model_id and choice.enabled:
                 current_translation_model_id = choice.model_id
                 break
 
     current_steps = normalize_steps(BASE_CFG.get("steps"))
+    current_src_lang, current_tgt_lang = _current_base_languages()
+    src_language_choices = _language_choices(current_src_lang)
+    tgt_language_choices = _language_choices(current_tgt_lang)
     base_output_cfg = BASE_CFG.get("output") or {}
     base_paths_cfg = BASE_CFG.get("paths") or {}
     default_input_mode, default_input_path = resolve_saved_input_state(BASE_CFG)
@@ -1170,6 +1366,25 @@ def main():
     layout = [
         [sg.Text("Project name:"),
          sg.Input(key="-PROJECT-", expand_x=True)],
+        [sg.Text("Language pair:"),
+         sg.Combo(
+             values=src_language_choices,
+             key="-LANG_SRC-",
+             readonly=True,
+             enable_events=True,
+             default_value=current_src_lang,
+             size=(8, 1),
+         ),
+         sg.Text("->"),
+         sg.Combo(
+             values=tgt_language_choices,
+             key="-LANG_DST-",
+             readonly=True,
+             enable_events=True,
+             default_value=current_tgt_lang,
+             size=(8, 1),
+         ),
+         sg.Text("", key="-LANG_SUMMARY-", expand_x=True)],
         [sg.TabGroup(
             [[
                 sg.Tab("Video", video_tab_layout, key=TAB_VIDEO),
@@ -1242,7 +1457,17 @@ def main():
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
     window["-TRANSLATION_MODEL_ID-"].update(current_translation_model_id)
-    model_summary_text, model_summary_color = _translation_summary(current_translation_model_id)
+    lang_summary_text, lang_summary_color = _language_pair_summary(
+        current_src_lang,
+        current_tgt_lang,
+        translate_enabled=bool(current_steps.get("translate", False)),
+    )
+    window["-LANG_SUMMARY-"].update(lang_summary_text, text_color=lang_summary_color)
+    model_summary_text, model_summary_color = _translation_summary(
+        current_translation_model_id,
+        current_src_lang,
+        current_tgt_lang,
+    )
     window["-MODEL_SUMMARY-"].update(model_summary_text, text_color=model_summary_color)
     window["-STATUS-"].update(format_done_status(0, 0))
     _emit_info(window, f"Build: {build_info}")
@@ -1336,6 +1561,24 @@ def main():
             current_voice = values["-VOICE-"]
             _emit_info(window, f"Voice selected: {current_voice}")
 
+        if event in ("-LANG_SRC-", "-LANG_DST-"):
+            current_src_lang = normalize_language_code(values.get("-LANG_SRC-", current_src_lang), default="en")
+            current_tgt_lang = normalize_language_code(values.get("-LANG_DST-", current_tgt_lang), default="ru")
+            lang_summary_text, lang_summary_color = _language_pair_summary(
+                current_src_lang,
+                current_tgt_lang,
+                translate_enabled=bool(current_steps.get("translate", False)),
+            )
+            window["-LANG_SUMMARY-"].update(lang_summary_text, text_color=lang_summary_color)
+            if current_translation_model_id:
+                summary_text, summary_color = _translation_summary(
+                    current_translation_model_id,
+                    current_src_lang,
+                    current_tgt_lang,
+                )
+                window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
+            _emit_info(window, f"Language pair selected: {current_src_lang} -> {current_tgt_lang}")
+
         if event == "-PREVIEW-":
             if preview.is_active():
                 preview.stop()
@@ -1366,6 +1609,7 @@ def main():
                 voice_id=selected_voice_id,
                 preview_text=preview_text,
                 use_gpu=bool(values.get("-GPU-", cfg.usegpu if cfg is not None else True)),
+                lang=current_tgt_lang,
                 window=window,
             )
 
@@ -1440,6 +1684,17 @@ def main():
             if running:
                 sg.popup("A process is already running. Please wait for it to finish.", title="Info")
                 continue
+            if bool(current_steps.get("translate", False)):
+                ready_model_id = ensure_translation_model_ready_for_start(
+                    window,
+                    current_translation_model_id or values.get("-TRANSLATION_MODEL_ID-", ""),
+                    src_lang=current_src_lang,
+                    tgt_lang=current_tgt_lang,
+                )
+                if not ready_model_id:
+                    continue
+                current_translation_model_id = ready_model_id
+                values["-TRANSLATION_MODEL_ID-"] = ready_model_id
             run_count = handle_start_event(values, current_steps, video_exts, window, voice_id_by_display, progress_state)
             if run_count:
                 last_run_count = run_count
@@ -1469,12 +1724,26 @@ def main():
                 _emit_info(window, f"Audio synthesis error: {msg}")
 
         if event == "-MODELS-":
-            selected_model_id = show_models_modal(window, current_translation_model_id)
+            selected_model_id = show_models_modal(
+                window,
+                current_translation_model_id,
+                src_lang=current_src_lang,
+                tgt_lang=current_tgt_lang,
+            )
             if selected_model_id:
                 current_translation_model_id = selected_model_id
                 window["-TRANSLATION_MODEL_ID-"].update(current_translation_model_id)
-                persist_translation_model(current_translation_model_id)
-                summary_text, summary_color = _translation_summary(current_translation_model_id)
+                persist_languages(current_src_lang, current_tgt_lang)
+                persist_translation_model(
+                    current_translation_model_id,
+                    src_lang=current_src_lang,
+                    tgt_lang=current_tgt_lang,
+                )
+                summary_text, summary_color = _translation_summary(
+                    current_translation_model_id,
+                    current_src_lang,
+                    current_tgt_lang,
+                )
                 window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
                 spec = get_model_spec(current_translation_model_id)
                 _emit_info(window, f"Translation model selected: {spec.label} [{spec.id}]")
@@ -1482,6 +1751,12 @@ def main():
         if event == "-STEPS-":
             current_steps = show_steps_modal(window, current_steps)
             window["-STEPS_SUMMARY-"].update(steps_summary(current_steps))
+            lang_summary_text, lang_summary_color = _language_pair_summary(
+                current_src_lang,
+                current_tgt_lang,
+                translate_enabled=bool(current_steps.get("translate", False)),
+            )
+            window["-LANG_SUMMARY-"].update(lang_summary_text, text_color=lang_summary_color)
 
     preview.stop()
     audio_play.stop()
