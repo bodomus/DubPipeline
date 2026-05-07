@@ -47,6 +47,7 @@ def synthesize_preview_text(
     preview_text: str,
     out_file: Path,
     use_gpu: bool,
+    lang: str = "ru",
 ) -> None:
     if not preview_text.strip():
         raise ValueError("preview_text is empty")
@@ -54,7 +55,8 @@ def synthesize_preview_text(
     device = "cuda" if use_gpu and torch.cuda.is_available() else "cpu"
     tts = _load_tts(model_name, device)
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    tts.tts_to_file(text=preview_text, speaker=voice_id, language="ru", file_path=str(out_file))
+    preview_lang = (lang or "ru").strip().lower() or "ru"
+    tts.tts_to_file(text=preview_text, speaker=voice_id, language=preview_lang, file_path=str(out_file))
 
 
 def get_voices_compat():
@@ -73,8 +75,9 @@ def run(cfg: PipelineConfig) -> None:
     if TTS is None:
         raise RuntimeError("TTS provider=coqui выбран, но пакет TTS не установлен. Установите: pip install TTS")
 
-    segments_path = Path(getattr(cfg.paths, "segments_ru_file"))
-    out_dir = Path(getattr(cfg.paths, "segments_path"))
+    segments_path = Path(getattr(cfg.paths, "segments_tgt_file"))
+    out_dir = Path(getattr(cfg.paths, "tts_segments_dir"))
+    target_lang = (getattr(getattr(cfg, "languages", None), "tgt", "ru") or "ru").strip().lower() or "ru"
     if not segments_path.exists():
         raise FileNotFoundError(f"Segments file not found: {segments_path}")
 
@@ -82,6 +85,6 @@ def run(cfg: PipelineConfig) -> None:
         segments = json.load(f)
 
     segments = sorted(segments, key=lambda s: float(s.get("start", 0.0)))
-    wavs = synthesize_segments_to_wavs(segments, cfg, out_dir, show_progress=False)
-    info(f"[DONE] Russian TTS segments generated in: {out_dir}\n")
+    wavs = synthesize_segments_to_wavs(segments, cfg, out_dir, lang=target_lang, show_progress=False)
+    info(f"[DONE] Target-language TTS segments generated in: {out_dir}\n")
     info(f"Summary: ok={len(wavs)}, failed=0, skipped={max(0, len(segments) - len(wavs))}\n")

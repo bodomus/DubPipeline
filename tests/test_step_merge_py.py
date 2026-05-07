@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from dubpipeline.config import PathsConfig, PipelineConfig
 from dubpipeline.steps import step_merge_py
@@ -33,44 +33,57 @@ def _make_cfg(root: Path) -> PipelineConfig:
 
 
 class StepMergePyTests(unittest.TestCase):
+    @staticmethod
+    def _case_dir(prefix: str) -> Path:
+        root = Path("tests/.tmp_runtime")
+        root.mkdir(parents=True, exist_ok=True)
+        case = root / f"{prefix}_{uuid4().hex}"
+        case.mkdir(parents=True, exist_ok=True)
+        return case
+
     def test_hq_ducking_update_existing_uses_temp_and_atomic_replace(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(root)
-            cfg.paths.input_video.write_text("video", encoding="utf-8")
-            cfg.paths.audio_wav.write_text("audio", encoding="utf-8")
+        root = self._case_dir("merge_py_hq")
+        cfg = _make_cfg(root)
+        cfg.mux.orig_lang = "fra"
+        cfg.mux.target_lang = "deu"
+        cfg.mux.target_track_title = "German (DubPipeline)"
+        cfg.paths.input_video.write_text("video", encoding="utf-8")
+        cfg.paths.audio_wav.write_text("audio", encoding="utf-8")
 
-            mux_temp_out = root / "input.tmp.muxed.mp4"
-            expected_mix_path = Path(cfg.paths.out_dir) / f"{cfg.paths.input_video.stem}.hq_mix.m4a"
+        mux_temp_out = root / "input.tmp.muxed.mp4"
+        expected_mix_path = Path(cfg.paths.out_dir) / f"{cfg.paths.input_video.stem}.hq_mix.m4a"
 
-            with (
-                patch(
-                    "dubpipeline.steps.step_merge_py.merge_hq_config_from_pipeline",
-                    return_value=(object(), "auto"),
-                ),
-                patch("dubpipeline.steps.step_merge_py.render_hq_mix_audio") as render_hq_mix_audio,
-                patch("dubpipeline.steps.step_merge_py.mux_smart") as mux_smart,
-                patch(
-                    "dubpipeline.steps.step_merge_py.AtomicFileReplacer.make_temp_path",
-                    return_value=mux_temp_out,
-                ) as make_temp_path,
-                patch("dubpipeline.steps.step_merge_py.AtomicFileReplacer.replace_with_temp") as replace_with_temp,
-                patch("dubpipeline.steps.step_merge_py.AtomicFileReplacer.cleanup_temp") as cleanup_temp,
-            ):
-                step_merge_py.run(cfg)
+        with (
+            patch(
+                "dubpipeline.steps.step_merge_py.merge_hq_config_from_pipeline",
+                return_value=(object(), "auto"),
+            ),
+            patch("dubpipeline.steps.step_merge_py.render_hq_mix_audio") as render_hq_mix_audio,
+            patch("dubpipeline.steps.step_merge_py.mux_smart") as mux_smart,
+            patch(
+                "dubpipeline.steps.step_merge_py.AtomicFileReplacer.make_temp_path",
+                return_value=mux_temp_out,
+            ) as make_temp_path,
+            patch("dubpipeline.steps.step_merge_py.AtomicFileReplacer.replace_with_temp") as replace_with_temp,
+            patch("dubpipeline.steps.step_merge_py.AtomicFileReplacer.cleanup_temp") as cleanup_temp,
+        ):
+            step_merge_py.run(cfg)
 
-            make_temp_path.assert_called_once_with(cfg.paths.input_video)
-            render_hq_mix_audio.assert_called_once()
-            self.assertEqual(render_hq_mix_audio.call_args.kwargs["out_audio"], expected_mix_path)
+        make_temp_path.assert_called_once_with(cfg.paths.input_video)
+        render_hq_mix_audio.assert_called_once()
+        self.assertEqual(render_hq_mix_audio.call_args.kwargs["out_audio"], expected_mix_path)
 
-            mux_call = mux_smart.call_args
-            self.assertIsNotNone(mux_call)
-            self.assertEqual(mux_call.args[0], cfg.paths.input_video)
-            self.assertEqual(mux_call.args[1], expected_mix_path)
-            self.assertEqual(mux_call.args[2], mux_temp_out)
+        mux_call = mux_smart.call_args
+        self.assertIsNotNone(mux_call)
+        self.assertEqual(mux_call.args[0], cfg.paths.input_video)
+        self.assertEqual(mux_call.args[1], expected_mix_path)
+        self.assertEqual(mux_call.args[2], mux_temp_out)
+        self.assertEqual(mux_call.kwargs["orig_lang"], "fra")
+        self.assertEqual(mux_call.kwargs["ru_lang"], "deu")
+        self.assertEqual(mux_call.kwargs["ru_title"], "German (DubPipeline)")
 
-            replace_with_temp.assert_called_once_with(cfg.paths.input_video, mux_temp_out, keep_backup=False)
-            cleanup_temp.assert_not_called()
+        replace_with_temp.assert_called_once_with(cfg.paths.input_video, mux_temp_out, keep_backup=False)
+        cleanup_temp.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -8,13 +8,15 @@ from pathlib import Path
 from uuid import uuid4
 
 from dubpipeline.cli import (
+    _build_cfg_for_input,
     _build_cli_set,
     _detect_input_source,
     _parse_steps_arg,
     _resolve_input_options,
+    _validate_run_language_pair,
     build_parser,
 )
-from dubpipeline.config import load_pipeline_config_ex, save_pipeline_yaml
+from dubpipeline.config import PipelineConfig, load_pipeline_config_ex, save_pipeline_yaml
 
 
 class CliTests(unittest.TestCase):
@@ -83,6 +85,37 @@ class CliTests(unittest.TestCase):
         )
         with self.assertRaises(SystemExit):
             _build_cli_set(args, parser)
+
+    def test_lang_src_rejects_unsupported_language(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "video.pipeline.yaml", "--lang-src", "en"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                _build_cli_set(args, parser)
+        self.assertIn("--lang-src must be one of", stderr.getvalue())
+
+    def test_same_language_pair_is_rejected_when_translate_enabled(self):
+        parser = build_parser()
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "ru"
+        cfg.languages.tgt = "ru"
+        cfg.steps.translate = True
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                _validate_run_language_pair(cfg, parser, allow_legacy=False)
+        self.assertIn("must be different", stderr.getvalue())
+
+    def test_same_language_pair_is_allowed_when_translate_disabled(self):
+        parser = build_parser()
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "ru"
+        cfg.languages.tgt = "ru"
+        cfg.steps.translate = False
+
+        _validate_run_language_pair(cfg, parser, allow_legacy=False)
 
     def test_in_file_and_in_dir_are_mutually_exclusive(self):
         parser = build_parser()
@@ -236,6 +269,84 @@ paths:
         self.assertIn("audio_merge.ducking.release_ms=320", cli_set)
         self.assertIn("audio_merge.loudness.enabled=false", cli_set)
 
+    def test_default_artifacts_follow_target_language(self):
+        root = self._case_dir("cli_target_default_artifacts")
+        proj = root / "project"
+        proj.mkdir(parents=True, exist_ok=True)
+        pipeline_file = proj / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: de
+paths:
+  workdir: .
+  out_dir: out
+  input_video: source.mp4
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertTrue(str(cfg.paths.segments_tgt_file).endswith("sample.segments.de.json"))
+        self.assertTrue(str(cfg.paths.segments_ru_file).endswith("sample.segments.de.json"))
+        self.assertTrue(str(cfg.paths.tts_segments_dir).endswith("tts_de_segments"))
+        self.assertTrue(str(cfg.paths.tts_segments_aligned_dir).endswith("tts_de_segments_aligned"))
+        self.assertTrue(str(cfg.paths.final_video).endswith("sample.de.muxed.mp4"))
+
+    def test_legacy_segments_ru_template_key_maps_to_target_file(self):
+        root = self._case_dir("cli_target_legacy_template")
+        proj = root / "project"
+        proj.mkdir(parents=True, exist_ok=True)
+        pipeline_file = proj / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: fr
+paths:
+  workdir: .
+  out_dir: out
+  input_video: source.mp4
+  templates:
+    segments_ru_json: "{out_dir}/{project_name}.legacy.fr.json"
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertTrue(str(cfg.paths.segments_tgt_file).endswith("sample.legacy.fr.json"))
+
+    def test_build_cfg_for_input_uses_target_language_artifact_names(self):
+        root = self._case_dir("cli_target_artifacts")
+        pipeline_file = root / "video.pipeline.yaml"
+        source = root / "clip.mp4"
+        source.write_text("x", encoding="utf-8")
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: es
+paths:
+  workdir: .
+  out_dir: out
+  input_video: clip.mp4
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+        run_cfg = _build_cfg_for_input(cfg, source)
+
+        self.assertTrue(str(run_cfg.paths.segments_tgt_file).endswith("clip.segments.es.json"))
+        self.assertTrue(str(run_cfg.paths.tts_segments_dir).endswith("tts_es_segments"))
+        self.assertTrue(str(run_cfg.paths.final_video).endswith("clip.es.muxed.mp4"))
+
     def test_save_pipeline_yaml_persists_update_existing_settings(self):
         root = self._case_dir("cli_save_update_existing")
         pipeline_file = root / "sample.pipeline.yaml"
@@ -278,6 +389,56 @@ paths:
         save_pipeline_yaml(values, pipeline_file)
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
         self.assertTrue(cfg.use_existing_subtitles)
+
+    def test_save_pipeline_yaml_persists_language_pair_and_pair_model_ref(self):
+        root = self._case_dir("cli_save_languages")
+        pipeline_file = root / "sample.pipeline.yaml"
+        values = {
+            "-PROJECT-": "sample",
+            "-OUT-": "out",
+            "-IN-": "sample.mp4",
+            "-LANG_SRC-": "fr",
+            "-LANG_DST-": "de",
+            "-TRANSLATION_MODEL_ID-": "opus_mt",
+            "-MODES-": "Add",
+            "-GPU-": True,
+            "-REBUILD-": False,
+            "-SRT-": False,
+            "-CLEANUP-": False,
+            "-MOVE_TO_DIR-": "",
+            "-UPDATE_EXISTING_FILE-": False,
+        }
+
+        save_pipeline_yaml(values, pipeline_file)
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertEqual(cfg.languages.src, "fr")
+        self.assertEqual(cfg.languages.tgt, "de")
+        self.assertEqual(cfg.translation.model_id, "opus_mt")
+        self.assertEqual(cfg.translation.model_ref, "Helsinki-NLP/opus-mt-fr-de")
+
+    def test_load_pipeline_config_sets_target_mux_metadata_defaults(self):
+        root = self._case_dir("cli_mux_target_defaults")
+        pipeline_file = root / "sample.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: fr
+  tgt: de
+paths:
+  workdir: .
+  out_dir: out
+  input_video: sample.mp4
+""".strip(),
+            encoding="utf-8",
+        )
+
+        cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertEqual(cfg.mux.orig_lang, "fra")
+        self.assertEqual(cfg.mux.target_lang, "deu")
+        self.assertEqual(cfg.mux.target_track_title, "German (DubPipeline)")
 
     def test_save_pipeline_yaml_persists_unified_input_model(self):
         root = self._case_dir("cli_save_input_model")

@@ -12,9 +12,11 @@ import torch
 import yaml
 
 from dubpipeline.models.catalog import (
+    get_model_status,
     get_model_spec,
     infer_model_id_from_legacy_translate,
     legacy_translate_backend_for_model,
+    resolve_model_spec,
     resolve_default_model_id,
 )
 from dubpipeline.utils.logging import info, warn
@@ -43,6 +45,65 @@ from dubpipeline.utils.logging import info, warn
 class LanguagesConfig:
     src: str = "en"
     tgt: str = "ru"
+
+
+SUPPORTED_TRANSLATION_LANGUAGES: tuple[str, ...] = ("de", "fr", "es", "ru")
+LEGACY_TRANSLATION_LANGUAGES: tuple[str, ...] = ("en",)
+MUX_LANGUAGE_TAGS: dict[str, str] = {
+    "en": "eng",
+    "de": "deu",
+    "fr": "fra",
+    "es": "spa",
+    "ru": "rus",
+}
+TARGET_TRACK_TITLES: dict[str, str] = {
+    "de": "German (DubPipeline)",
+    "fr": "French (DubPipeline)",
+    "es": "Spanish (DubPipeline)",
+    "ru": "Russian (DubPipeline)",
+}
+
+
+def normalize_language_code(value: str | None, *, default: str) -> str:
+    code = (value or "").strip().lower()
+    return code or default
+
+
+def supported_translation_languages(*, allow_legacy: bool = False) -> tuple[str, ...]:
+    if allow_legacy:
+        return LEGACY_TRANSLATION_LANGUAGES + SUPPORTED_TRANSLATION_LANGUAGES
+    return SUPPORTED_TRANSLATION_LANGUAGES
+
+
+def validate_translation_language_pair(
+    src_lang: str | None,
+    tgt_lang: str | None,
+    *,
+    translate_enabled: bool,
+    allow_legacy: bool = False,
+) -> str | None:
+    src = normalize_language_code(src_lang, default=LanguagesConfig().src)
+    tgt = normalize_language_code(tgt_lang, default=LanguagesConfig().tgt)
+    allowed = supported_translation_languages(allow_legacy=allow_legacy)
+    allowed_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
+
+    if src not in allowed:
+        return f"Unsupported source language '{src}'. Supported languages: {allowed_text}."
+    if tgt not in allowed:
+        return f"Unsupported target language '{tgt}'. Supported languages: {allowed_text}."
+    if translate_enabled and src == tgt:
+        return "Source and target languages must be different when the Translate step is enabled."
+    return None
+
+
+def mux_language_tag(lang_code: str | None, *, default: str) -> str:
+    code = normalize_language_code(lang_code, default=default)
+    return MUX_LANGUAGE_TAGS.get(code, default)
+
+
+def default_target_track_title(lang_code: str | None) -> str:
+    code = normalize_language_code(lang_code, default=LanguagesConfig().tgt)
+    return TARGET_TRACK_TITLES.get(code, f"{code.upper()} (DubPipeline)")
 
 
 class AudioUpdateMode(str, Enum):
@@ -103,11 +164,19 @@ class StepsConfig:
 class PathsTemplatesConfig:
     audio_wav: str = "{out_dir}/{project_name}.wav"
     segments_json: str = "{out_dir}/{project_name}.segments.json"
-    segments_ru_json: str = "{out_dir}/{project_name}.segments.ru.json"
+    segments_tgt_json: str = "{out_dir}/{project_name}.segments.{target_lang}.json"
     srt_en: str = "{out_dir}/{project_name}.srt"
-    tts_segments_dir: str = "{out_dir}/segments/tts_ru_segments"
-    tts_segments_aligned_dir: str = "{out_dir}/segments/tts_ru_segments_aligned"
-    final_video: str = "{out_dir}/{project_name}.ru.muxed.mp4"
+    tts_segments_dir: str = "{out_dir}/segments/tts_{target_lang}_segments"
+    tts_segments_aligned_dir: str = "{out_dir}/segments/tts_{target_lang}_segments_aligned"
+    final_video: str = "{out_dir}/{project_name}.{target_lang}.muxed.mp4"
+
+    @property
+    def segments_ru_json(self) -> str:
+        return self.segments_tgt_json
+
+    @segments_ru_json.setter
+    def segments_ru_json(self, value: str) -> None:
+        self.segments_tgt_json = value
 
 
 @dataclass
@@ -149,6 +218,15 @@ class PathsConfig:
     #
     # Keep these properties during transition / tests, then remove later.
     # ---------------------------------------------------------------------
+
+    @property
+    def segments_tgt_file(self) -> Path:  # noqa: D401
+        """Preferred alias for translated segments file."""
+        return self.segments_ru_file
+
+    @segments_tgt_file.setter
+    def segments_tgt_file(self, value: Path | str) -> None:
+        self.segments_ru_file = Path(value)
 
     @property
     def segments_path(self) -> Path:  # noqa: D401
@@ -234,6 +312,14 @@ class TtsConfig:
     try_single_call: bool = True
     try_single_call_max_chars: int = 1200
 
+    @property
+    def max_target_chars(self) -> int:
+        return self.max_ru_chars
+
+    @max_target_chars.setter
+    def max_target_chars(self, value: int) -> None:
+        self.max_ru_chars = int(value)
+
 
 @dataclass
 class MuxConfig:
@@ -244,6 +330,22 @@ class MuxConfig:
     ru_track_title: str = "Russian (DubPipeline)"
     orig_lang: str = "eng"
     ru_lang: str = "rus"
+
+    @property
+    def target_track_title(self) -> str:
+        return self.ru_track_title
+
+    @target_track_title.setter
+    def target_track_title(self, value: str) -> None:
+        self.ru_track_title = value
+
+    @property
+    def target_lang(self) -> str:
+        return self.ru_lang
+
+    @target_lang.setter
+    def target_lang(self, value: str) -> None:
+        self.ru_lang = value
 
 
 @dataclass
@@ -564,11 +666,18 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
         or legacy_input_dir
         or "{project_name}.mp4"
     )
+    languages = raw.get("languages") or {}
+    source_lang = str(languages.get("src", LanguagesConfig().src) or LanguagesConfig().src).strip().lower() or LanguagesConfig().src
+    target_lang = str(languages.get("tgt", LanguagesConfig().tgt) or LanguagesConfig().tgt).strip().lower() or LanguagesConfig().tgt
     variables = {
         "project_name": raw.get("project_name", ""),
         "project_dir": str(project_dir),
         "workdir": str(workdir),
         "out_dir": str(out_dir),
+        "source_lang": source_lang,
+        "src_lang": source_lang,
+        "target_lang": target_lang,
+        "tgt_lang": target_lang,
     }
     input_video_s = _format_all_strings(input_video_s, variables)
     input_video = Path(input_video_s)
@@ -584,10 +693,26 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
     # - templates.segments_align_path  -> templates.tts_segments_aligned_dir
     # If user provided the old key but not the new one, prefer the old key.
     if isinstance(tmpl, dict):
-        if "segments_path" in tmpl and "tts_segments_dir" not in tmpl:
-            merged_tmpl["tts_segments_dir"] = merged_tmpl.get("segments_path")
-        if "segments_align_path" in tmpl and "tts_segments_aligned_dir" not in tmpl:
-            merged_tmpl["tts_segments_aligned_dir"] = merged_tmpl.get("segments_align_path")
+        if "segments_ru_json" in tmpl and (
+            "segments_tgt_json" not in tmpl or tmpl.get("segments_tgt_json") == default_tmpl.get("segments_tgt_json")
+        ):
+            merged_tmpl["segments_tgt_json"] = tmpl.get("segments_ru_json")
+        if "segments_path" in tmpl and (
+            "tts_segments_dir" not in tmpl or tmpl.get("tts_segments_dir") == default_tmpl.get("tts_segments_dir")
+        ):
+            merged_tmpl["tts_segments_dir"] = tmpl.get("segments_path")
+        if "segments_align_path" in tmpl and (
+            "tts_segments_aligned_dir" not in tmpl
+            or tmpl.get("tts_segments_aligned_dir") == default_tmpl.get("tts_segments_aligned_dir")
+        ):
+            merged_tmpl["tts_segments_aligned_dir"] = tmpl.get("segments_align_path")
+        if "tts_segments_align_dir" in tmpl and (
+            "tts_segments_aligned_dir" not in tmpl
+            or tmpl.get("tts_segments_aligned_dir") == default_tmpl.get("tts_segments_aligned_dir")
+        ):
+            merged_tmpl["tts_segments_aligned_dir"] = tmpl.get("tts_segments_align_dir")
+        if "srt_file_en" in tmpl and ("srt_en" not in tmpl or tmpl.get("srt_en") == default_tmpl.get("srt_en")):
+            merged_tmpl["srt_en"] = tmpl.get("srt_file_en")
 
     merged_tmpl = _format_all_strings(merged_tmpl, variables)
 
@@ -597,20 +722,26 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
             p = (workdir / p).resolve()
         return p
 
+    template_values = default_tmpl | {
+        key: str(value)
+        for key, value in merged_tmpl.items()
+        if key in default_tmpl
+    }
+
     return PathsConfig(
         workdir=workdir,
         out_dir=out_dir,
         input_video=input_video,
         audio_wav=_p(merged_tmpl["audio_wav"]),
         segments_file=_p(merged_tmpl["segments_json"]),
-        segments_ru_file=_p(merged_tmpl["segments_ru_json"]),
+        segments_ru_file=_p(merged_tmpl["segments_tgt_json"]),
         srt_file_en=_p(merged_tmpl["srt_en"]),
         tts_segments_dir=_p(merged_tmpl["tts_segments_dir"]),
         tts_segments_aligned_dir=_p(merged_tmpl["tts_segments_aligned_dir"]),
         final_video=_p(merged_tmpl["final_video"]),
         input_text=Path(paths.get("input_text")).resolve() if paths.get("input_text") else None,
         final_audio=_p(paths.get("final_audio")) if paths.get("final_audio") else None,
-        templates=PathsTemplatesConfig(**default_tmpl | {k: str(v) for k, v in merged_tmpl.items()}),
+        templates=PathsTemplatesConfig(**template_values),
     )
 
 
@@ -687,14 +818,21 @@ def load_pipeline_config_ex(
             translate.hf_model,
         )
     if not translation.model_id:
-        translation.model_id = legacy_model_id or resolve_default_model_id()
+        translation.model_id = legacy_model_id or resolve_default_model_id(languages.src, languages.tgt)
 
     try:
-        model_spec = get_model_spec(translation.model_id)
+        model_spec = resolve_model_spec(translation.model_id, languages.src, languages.tgt)
     except ValueError:
         warn(f"[config] Unknown translation.model_id='{translation.model_id}', falling back to default.")
-        translation.model_id = resolve_default_model_id()
-        model_spec = get_model_spec(translation.model_id)
+        translation.model_id = resolve_default_model_id(languages.src, languages.tgt)
+        model_spec = resolve_model_spec(translation.model_id, languages.src, languages.tgt)
+
+    model_status = get_model_status(translation.model_id, languages.src, languages.tgt)
+    if str(model_status.reason or "").startswith("unsupported for "):
+        warn(
+            f"[config] translation.model_id='{translation.model_id}' is {model_status.reason}; "
+            "keeping selection but runtime install/usage will be disabled."
+        )
 
     translation.backend = model_spec.backend
     translation.model_ref = model_spec.model_ref
@@ -728,12 +866,13 @@ def load_pipeline_config_ex(
     )
 
     # inherit language defaults into mux if user didn't override
-    if not mux.orig_lang:
-        mux.orig_lang = "eng"
-    if languages.src and mux.orig_lang == "eng" and languages.src.lower().startswith("en"):
-        pass  # ok
-    if languages.tgt and mux.ru_lang == "rus" and languages.tgt.lower().startswith("ru"):
-        pass  # ok
+    default_mux = MuxConfig()
+    if not mux.orig_lang or mux.orig_lang == default_mux.orig_lang:
+        mux.orig_lang = mux_language_tag(languages.src, default=default_mux.orig_lang)
+    if not mux.ru_lang or mux.ru_lang == default_mux.ru_lang:
+        mux.ru_lang = mux_language_tag(languages.tgt, default=default_mux.ru_lang)
+    if not mux.ru_track_title or mux.ru_track_title == default_mux.ru_track_title:
+        mux.ru_track_title = default_target_track_title(languages.tgt)
 
     # final
     cfg = PipelineConfig(
@@ -822,17 +961,31 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     cfg.setdefault("tts", {})
     cfg["tts"]["voice"] = values.get("-VOICE-", cfg["tts"].get("voice", ""))
 
+    selected_src_lang = normalize_language_code(
+        values.get("-LANG_SRC-", (cfg.get("languages") or {}).get("src", "en")),
+        default="en",
+    )
+    selected_tgt_lang = normalize_language_code(
+        values.get("-LANG_DST-", (cfg.get("languages") or {}).get("tgt", "ru")),
+        default="ru",
+    )
+    cfg.setdefault("languages", {})
+    cfg["languages"]["src"] = selected_src_lang
+    cfg["languages"]["tgt"] = selected_tgt_lang
+
     selected_model_id = (
         values.get("-TRANSLATION_MODEL_ID-", "")
         or (cfg.get("translation", {}) or {}).get("model_id", "")
     ).strip()
+    src_lang = selected_src_lang
+    tgt_lang = selected_tgt_lang
     if not selected_model_id:
-        selected_model_id = resolve_default_model_id()
+        selected_model_id = resolve_default_model_id(src_lang, tgt_lang)
 
     try:
-        model_spec = get_model_spec(selected_model_id)
+        model_spec = resolve_model_spec(selected_model_id, src_lang, tgt_lang)
     except ValueError:
-        model_spec = get_model_spec(resolve_default_model_id())
+        model_spec = resolve_model_spec(resolve_default_model_id(src_lang, tgt_lang), src_lang, tgt_lang)
 
     cfg.setdefault("translation", {})
     cfg["translation"]["model_id"] = model_spec.id

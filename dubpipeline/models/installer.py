@@ -4,16 +4,20 @@ import math
 import os
 import shutil
 import threading
+import time
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Callable, Literal
+
+from tqdm.auto import tqdm
 
 from dubpipeline.models.catalog import (
     NOT_INSTALLED_REASON,
     NOT_SUPPORTED_REASON,
     get_model_spec,
     get_model_status,
+    is_unsupported_pair_reason,
+    resolve_model_spec,
 )
 from dubpipeline.models.storage import (
     UNKNOWN_SIZE_MIN_FREE_BYTES,
@@ -64,7 +68,45 @@ def _format_gib(size_bytes: int) -> str:
     return f"{size_bytes / (1024 ** 3):.1f}"
 
 
-class _InstallProgressTqdm:
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_progress_message(base_message: str, progress: float, elapsed_seconds: float) -> str:
+    bounded_progress = max(0.0, min(0.98, float(progress)))
+    percent = int(round(bounded_progress * 100))
+    elapsed = _format_duration(elapsed_seconds)
+    if bounded_progress <= 0:
+        return f"{base_message} {percent}% | elapsed {elapsed} | remaining estimating..."
+
+    remaining_seconds = elapsed_seconds * (1.0 - bounded_progress) / bounded_progress
+    remaining = _format_duration(remaining_seconds)
+    return f"{base_message} {percent}% | elapsed {elapsed} | remaining ~{remaining}"
+
+
+def _build_install_progress_tqdm(
+    *,
+    cancel_event: threading.Event,
+    progress_hook: Callable[[float], None],
+):
+    class InstallProgressTqdm(_InstallProgressTqdm):
+        def __init__(self, *args, **kwargs):
+            super().__init__(
+                *args,
+                cancel_event=cancel_event,
+                progress_hook=progress_hook,
+                **kwargs,
+            )
+
+    return InstallProgressTqdm
+
+
+class _InstallProgressTqdm(tqdm):
     """Small tqdm proxy used by huggingface_hub to report download progress."""
 
     def __init__(
@@ -74,35 +116,22 @@ class _InstallProgressTqdm:
         progress_hook: Callable[[float], None],
         **kwargs,
     ):
-        from tqdm.auto import tqdm
-
         self._cancel_event = cancel_event
         self._progress_hook = progress_hook
-        self._bar = tqdm(*args, **kwargs)
-
-    @property
-    def n(self):
-        return self._bar.n
-
-    @property
-    def total(self):
-        return self._bar.total
+        super().__init__(*args, **kwargs)
 
     def update(self, n=1):
         if self._cancel_event.is_set():
             raise InstallCancelledError("Install cancelled by user.")
-        out = self._bar.update(n)
-        total = self._bar.total or 0
+        out = super().update(n)
+        total = self.total or 0
         if total > 0:
-            progress = max(0.0, min(1.0, self._bar.n / total))
+            progress = max(0.0, min(1.0, self.n / total))
             self._progress_hook(progress)
         return out
 
     def close(self):
-        return self._bar.close()
-
-    def __getattr__(self, name):
-        return getattr(self._bar, name)
+        return super().close()
 
 
 class ModelInstaller:
@@ -118,16 +147,23 @@ class ModelInstaller:
         self._statuses: dict[str, ModelInstallStatus] = {}
         self._cancel_events: dict[str, threading.Event] = {}
 
-    def get_status(self, model_id: str) -> ModelInstallStatus:
-        spec = get_model_spec(model_id)
+    @staticmethod
+    def _status_key(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> str:
+        src = (src_lang or "en").strip().lower() or "en"
+        tgt = (tgt_lang or "ru").strip().lower() or "ru"
+        return f"{model_id}|{src}|{tgt}"
+
+    def get_status(self, model_id: str, *, src_lang: str | None = None, tgt_lang: str | None = None) -> ModelInstallStatus:
+        spec = resolve_model_spec(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        status_key = self._status_key(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         with self._lock:
-            current = self._statuses.get(model_id)
+            current = self._statuses.get(status_key)
 
         if current is not None and current.status == "downloading":
             return current
 
         if current is not None and current.status == "failed":
-            runtime = get_model_status(model_id)
+            runtime = get_model_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
             if not runtime.available:
                 return current
 
@@ -139,7 +175,14 @@ class ModelInstaller:
                 message=NOT_SUPPORTED_REASON,
             )
 
-        runtime = get_model_status(model_id)
+        runtime = get_model_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        if is_unsupported_pair_reason(runtime.reason):
+            return ModelInstallStatus(
+                model_id=model_id,
+                status="not_installed",
+                progress=0.0,
+                message=runtime.reason,
+            )
         if runtime.available:
             return ModelInstallStatus(
                 model_id=model_id,
@@ -154,21 +197,22 @@ class ModelInstaller:
             message=runtime.reason or NOT_INSTALLED_REASON,
         )
 
-    def cancel(self, model_id: str) -> None:
+    def cancel(self, model_id: str, *, src_lang: str | None = None, tgt_lang: str | None = None) -> None:
+        status_key = self._status_key(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         with self._lock:
-            cancel_event = self._cancel_events.get(model_id)
+            cancel_event = self._cancel_events.get(status_key)
             if cancel_event is None:
                 return
             cancel_event.set()
-            self._statuses[model_id] = ModelInstallStatus(
+            self._statuses[status_key] = ModelInstallStatus(
                 model_id=model_id,
                 status="downloading",
-                progress=self._statuses.get(model_id, ModelInstallStatus(model_id, "downloading")).progress,
+                progress=self._statuses.get(status_key, ModelInstallStatus(model_id, "downloading")).progress,
                 message="Cancelling...",
             )
 
-    def check_free_space(self, model_id: str) -> DiskSpaceCheckResult:
-        spec = get_model_spec(model_id)
+    def check_free_space(self, model_id: str, *, src_lang: str | None = None, tgt_lang: str | None = None) -> DiskSpaceCheckResult:
+        spec = resolve_model_spec(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         models_root = get_models_root_dir(create=True)
         usage = self._disk_usage_fn(models_root)
         if hasattr(usage, "free"):
@@ -191,8 +235,17 @@ class ModelInstaller:
             size_unknown=size_unknown,
         )
 
-    def install(self, model_id: str, progress_cb: InstallProgressCallback | None = None) -> InstallResult:
-        spec = get_model_spec(model_id)
+    def install(
+        self,
+        model_id: str,
+        *,
+        src_lang: str | None = None,
+        tgt_lang: str | None = None,
+        progress_cb: InstallProgressCallback | None = None,
+    ) -> InstallResult:
+        spec = resolve_model_spec(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        status_key = self._status_key(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        runtime_status = get_model_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         if not spec.supported or spec.installer == "none":
             return InstallResult(
                 model_id=model_id,
@@ -200,8 +253,16 @@ class ModelInstaller:
                 status="not_installed",
                 message="Model is planned and not supported yet.",
             )
+        if is_unsupported_pair_reason(runtime_status.reason):
+            return InstallResult(
+                model_id=model_id,
+                ok=False,
+                status="not_installed",
+                message=runtime_status.reason,
+                error=runtime_status.reason,
+            )
 
-        current = self.get_status(model_id)
+        current = self.get_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         if current.status == "installed":
             return InstallResult(
                 model_id=model_id,
@@ -211,7 +272,7 @@ class ModelInstaller:
             )
 
         with self._lock:
-            if model_id in self._cancel_events:
+            if status_key in self._cancel_events:
                 return InstallResult(
                     model_id=model_id,
                     ok=False,
@@ -219,9 +280,9 @@ class ModelInstaller:
                     message="Install is already in progress.",
                 )
             cancel_event = threading.Event()
-            self._cancel_events[model_id] = cancel_event
+            self._cancel_events[status_key] = cancel_event
 
-        free_space = self.check_free_space(model_id)
+        free_space = self.check_free_space(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
         if not free_space.ok:
             msg = (
                 "Not enough disk space. "
@@ -231,9 +292,9 @@ class ModelInstaller:
             if free_space.size_unknown:
                 msg += " Model size is unknown; using 10 GB reserve."
             failed = ModelInstallStatus(model_id=model_id, status="failed", progress=0.0, message=msg, error=msg)
-            self._set_status(failed, progress_cb=progress_cb)
+            self._set_status(failed, status_key=status_key, progress_cb=progress_cb)
             with self._lock:
-                self._cancel_events.pop(model_id, None)
+                self._cancel_events.pop(status_key, None)
             return InstallResult(model_id=model_id, ok=False, status="failed", message=msg, error=msg)
 
         initial_msg = "Starting install..."
@@ -241,14 +302,25 @@ class ModelInstaller:
             initial_msg = "Starting install (model size unknown, reserving 10 GB)."
         self._set_status(
             ModelInstallStatus(model_id=model_id, status="downloading", progress=0.0, message=initial_msg),
+            status_key=status_key,
             progress_cb=progress_cb,
         )
 
         try:
             if spec.installer == "hf_snapshot":
-                installed_dir = self._install_hf_snapshot(spec, cancel_event=cancel_event, progress_cb=progress_cb)
+                installed_dir = self._install_hf_snapshot(
+                    spec,
+                    cancel_event=cancel_event,
+                    progress_cb=progress_cb,
+                    status_key=status_key,
+                )
             elif spec.installer == "argos_package":
-                installed_dir = self._install_argos_package(spec, cancel_event=cancel_event, progress_cb=progress_cb)
+                installed_dir = self._install_argos_package(
+                    spec,
+                    cancel_event=cancel_event,
+                    progress_cb=progress_cb,
+                    status_key=status_key,
+                )
             else:
                 raise RuntimeError(f"Unsupported installer kind: {spec.installer}")
 
@@ -261,7 +333,7 @@ class ModelInstaller:
                 progress=1.0,
                 message="Installed.",
             )
-            self._set_status(installed_status, progress_cb=progress_cb)
+            self._set_status(installed_status, status_key=status_key, progress_cb=progress_cb)
             return InstallResult(
                 model_id=model_id,
                 ok=True,
@@ -277,7 +349,7 @@ class ModelInstaller:
                 message="Install cancelled.",
                 error=str(exc),
             )
-            self._set_status(status, progress_cb=progress_cb)
+            self._set_status(status, status_key=status_key, progress_cb=progress_cb)
             return InstallResult(
                 model_id=model_id,
                 ok=False,
@@ -289,7 +361,7 @@ class ModelInstaller:
         except Exception as exc:
             msg = str(exc) or "Install failed."
             failed = ModelInstallStatus(model_id=model_id, status="failed", progress=0.0, message=msg, error=msg)
-            self._set_status(failed, progress_cb=progress_cb)
+            self._set_status(failed, status_key=status_key, progress_cb=progress_cb)
             return InstallResult(
                 model_id=model_id,
                 ok=False,
@@ -299,16 +371,17 @@ class ModelInstaller:
             )
         finally:
             with self._lock:
-                self._cancel_events.pop(model_id, None)
+                self._cancel_events.pop(status_key, None)
 
     def _set_status(
         self,
         status: ModelInstallStatus,
         *,
+        status_key: str | None = None,
         progress_cb: InstallProgressCallback | None,
     ) -> None:
         with self._lock:
-            self._statuses[status.model_id] = status
+            self._statuses[status_key or status.model_id] = status
         if progress_cb is not None:
             progress_cb(status)
 
@@ -318,6 +391,7 @@ class ModelInstaller:
         *,
         cancel_event: threading.Event,
         progress_cb: InstallProgressCallback | None,
+        status_key: str,
     ) -> Path:
         partial_dir = get_partial_model_dir(spec.id, create=True)
         marker_file = partial_dir / "download.inprogress"
@@ -333,19 +407,26 @@ class ModelInstaller:
 
             snapshot_download = _snapshot_download
 
+        started_at = time.monotonic()
+
         def _progress_hook(progress: float) -> None:
+            bounded_progress = max(0.0, min(0.98, progress))
             self._set_status(
                 ModelInstallStatus(
                     model_id=spec.id,
                     status="downloading",
-                    progress=max(0.0, min(0.98, progress)),
-                    message="Downloading model files...",
+                    progress=bounded_progress,
+                    message=_format_progress_message(
+                        "Downloading model files...",
+                        bounded_progress,
+                        time.monotonic() - started_at,
+                    ),
                 ),
+                status_key=status_key,
                 progress_cb=progress_cb,
             )
 
-        tqdm_factory = partial(
-            _InstallProgressTqdm,
+        tqdm_class = _build_install_progress_tqdm(
             cancel_event=cancel_event,
             progress_hook=_progress_hook,
         )
@@ -355,7 +436,7 @@ class ModelInstaller:
             local_dir=str(target_dir),
             local_dir_use_symlinks=False,
             resume_download=True,
-            tqdm_class=tqdm_factory,
+            tqdm_class=tqdm_class,
         )
         if cancel_event.is_set():
             raise InstallCancelledError("Install cancelled by user.")
@@ -371,6 +452,7 @@ class ModelInstaller:
         *,
         cancel_event: threading.Event,
         progress_cb: InstallProgressCallback | None,
+        status_key: str,
     ) -> Path:
         partial_dir = get_partial_model_dir(spec.id, create=True)
         partial_dir.mkdir(parents=True, exist_ok=True)
@@ -378,15 +460,22 @@ class ModelInstaller:
         marker_file.write_text("downloading", encoding="utf-8")
 
         package_dir = configure_argos_packages_dir(create=True)
+        started_at = time.monotonic()
 
         def _emit(progress: float, message: str) -> None:
+            bounded_progress = max(0.0, min(0.98, progress))
             self._set_status(
                 ModelInstallStatus(
                     model_id=spec.id,
                     status="downloading",
-                    progress=max(0.0, min(0.98, progress)),
-                    message=message,
+                    progress=bounded_progress,
+                    message=_format_progress_message(
+                        message,
+                        bounded_progress,
+                        time.monotonic() - started_at,
+                    ),
                 ),
+                status_key=status_key,
                 progress_cb=progress_cb,
             )
 

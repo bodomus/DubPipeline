@@ -31,7 +31,7 @@ def run(cfg: PipelineConfig) -> None:
         translate_segments(
             cfg=cfg,
             input_file=cfg.paths.segments_file,
-            output_file=cfg.paths.segments_ru_file,
+            output_file=cfg.paths.segments_tgt_file,
             translator=translator,
         )
     except TranslationModelError as exc:
@@ -147,15 +147,18 @@ def translate_segments(
             _cache_put_many(con, new_items)
             cached.update({k: v for k, v in new_items})
 
+        target_lang = (cfg.languages.tgt or "").strip().lower()
         translated = []
         for idx, seg in enumerate(segments):
             text = seg.get("text", "") or ""
             cache_key = keys[idx]
-            text_ru = cached.get(cache_key, "") if _normalize_text(text) else ""
-            seg_out = {"id": idx, **seg, "text_ru": text_ru}
+            text_tgt = cached.get(cache_key, "") if _normalize_text(text) else ""
+            seg_out = {"id": idx, **seg, "text_tgt": text_tgt}
+            if target_lang == "ru":
+                seg_out["text_ru"] = text_tgt
             translated.append(seg_out)
             if idx < 20:
-                info(f"[{idx}] {text} -> {text_ru}\n")
+                info(f"[{idx}] {text} -> {text_tgt}\n")
             elif idx == 20:
                 info("... (log truncated)\n")
 

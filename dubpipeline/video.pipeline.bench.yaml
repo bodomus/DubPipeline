@@ -13,11 +13,11 @@ paths:
   input_video: J:\Projects\!!!AI\DubPipeline\tests\data\1. Simple Opaque Water.mp4
   audio_wav: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.wav
   segments_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.json
-  segments_ru_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.ru.json
+  segments_tgt_json: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.segments.{target_lang}.json
   srt_file_en: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.srt
-  tts_segments_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments
-  tts_segments_align_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_ru_segments_aligned
-  final_video: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.ru.muxed.mp4
+  tts_segments_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_{target_lang}_segments
+  tts_segments_aligned_dir: J:\Projects\!!!AI\DubPipeline\tests\output/segments/tts_{target_lang}_segments_aligned
+  final_video: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.{target_lang}.muxed.mp4
 steps:
   extract_audio: true
   asr_whisperx: true

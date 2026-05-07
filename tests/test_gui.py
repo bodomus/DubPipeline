@@ -220,6 +220,29 @@ class GuiUnifiedInputTests(unittest.TestCase):
             no_window=True,
         )
 
+    def test_browse_input_file_uses_direct_file_dialog(self):
+        from dubpipeline.gui import browse_input_path
+
+        file_types = (("Video files", "*.mp4"),)
+        with patch("dubpipeline.gui.sg.popup_get_file", return_value="C:/tmp/sample.mp4") as popup_get_file:
+            selected = browse_input_path(is_dir_mode=False, video_file_types=file_types)
+
+        self.assertEqual(selected, "C:/tmp/sample.mp4")
+        popup_get_file.assert_called_once_with(
+            "Select video file",
+            file_types=file_types,
+            no_window=True,
+        )
+
+    def test_browse_input_folder_uses_direct_folder_dialog(self):
+        from dubpipeline.gui import browse_input_path
+
+        with patch("dubpipeline.gui.sg.popup_get_folder", return_value="C:/tmp/videos") as popup_get_folder:
+            selected = browse_input_path(is_dir_mode=True, video_file_types=())
+
+        self.assertEqual(selected, "C:/tmp/videos")
+        popup_get_folder.assert_called_once_with("Select folder with videos", no_window=True)
+
 
 if __name__ == "__main__":
     unittest.main()

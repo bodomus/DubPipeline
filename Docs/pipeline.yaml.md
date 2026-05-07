@@ -64,3 +64,50 @@ python -m dubpipeline.cli run video.pipeline.yaml ^
 ```bash
 python -m dubpipeline.cli run video.pipeline.yaml --merge-mode hq_ducking --no-loudnorm
 ```
+
+## Languages
+
+Current public multilingual flow is built around a selected `source -> target` pair.
+
+Supported GUI/CLI language codes:
+
+- `de`
+- `fr`
+- `es`
+- `ru`
+
+CLI overrides:
+
+```bash
+python -m dubpipeline.cli run video.pipeline.yaml --lang-src fr --lang-dst de
+```
+
+Rules:
+
+- if `steps.translate=true`, `source` and `target` must be different
+- model availability is resolved for the selected pair
+- GUI and CLI validate the public selection against `de/fr/es/ru`
+- legacy YAML values such as `en` are still tolerated for backward compatibility
+
+## Target-Aware Artifacts
+
+Important output naming now follows `languages.tgt`:
+
+```yaml
+languages:
+  src: fr
+  tgt: de
+
+paths:
+  segments_tgt_json: "{out_dir}/{project_name}.segments.{target_lang}.json"
+  tts_segments_dir: "{out_dir}/segments/tts_{target_lang}_segments"
+  tts_segments_aligned_dir: "{out_dir}/segments/tts_{target_lang}_segments_aligned"
+  final_video: "{out_dir}/{project_name}.{target_lang}.muxed.mp4"
+```
+
+The final mux metadata also follows the selected target language. By default:
+
+- `de -> deu / German (DubPipeline)`
+- `fr -> fra / French (DubPipeline)`
+- `es -> spa / Spanish (DubPipeline)`
+- `ru -> rus / Russian (DubPipeline)`

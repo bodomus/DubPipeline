@@ -6,10 +6,11 @@ import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.models.catalog import build_model_choices, get_model_status
-from dubpipeline.models.installer import ModelInstaller
+from dubpipeline.models.installer import ModelInstaller, _format_progress_message
 from dubpipeline.models.storage import get_hf_snapshot_dir
 from dubpipeline.translation.service import TranslatorService
 
@@ -22,6 +23,14 @@ class _FakeDiskUsage:
 
 
 class ModelInstallerTests(unittest.TestCase):
+    @staticmethod
+    def _case_dir(prefix: str) -> Path:
+        root = Path("tests/.tmp_runtime")
+        root.mkdir(parents=True, exist_ok=True)
+        case = root / f"{prefix}_{uuid4().hex}"
+        case.mkdir(parents=True, exist_ok=True)
+        return case
+
     def test_free_space_check_blocks_install_when_space_is_low(self):
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
@@ -31,6 +40,18 @@ class ModelInstallerTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.status, "failed")
         self.assertIn("Not enough disk space", result.message)
+
+    def test_progress_message_includes_percent_elapsed_and_remaining(self):
+        message = _format_progress_message(
+            "Downloading model files...",
+            0.42,
+            78.0,
+        )
+
+        self.assertEqual(
+            message,
+            "Downloading model files... 42% | elapsed 01:18 | remaining ~01:48",
+        )
 
     def test_hf_install_uses_expected_local_dir(self):
         captured: dict[str, object] = {}
@@ -59,6 +80,46 @@ class ModelInstallerTests(unittest.TestCase):
         self.assertEqual(Path(captured["local_dir"]), expected)
         self.assertFalse(bool(captured["local_dir_use_symlinks"]))
         self.assertTrue(bool(captured["resume_download"]))
+        self.assertTrue(hasattr(captured["tqdm_class"], "get_lock"))
+
+    def test_pair_specific_hf_install_uses_pair_local_dir(self):
+        captured: dict[str, object] = {}
+
+        def fake_install_hf_snapshot(_self, spec, *, cancel_event, progress_cb, status_key):
+            del cancel_event, progress_cb
+            captured["model_ref"] = spec.model_ref
+            captured["status_key"] = status_key
+            return get_hf_snapshot_dir(spec.model_ref, create=True)
+
+        tmp = self._case_dir("installer_pair_hf")
+        with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": str(tmp)}):
+            with patch("dubpipeline.models.catalog._legacy_local_model_dirs", return_value=[]):
+                with patch("dubpipeline.models.catalog._hf_cache_roots", return_value=[]):
+                    with patch.object(
+                        ModelInstaller,
+                        "_install_hf_snapshot",
+                        autospec=True,
+                        side_effect=fake_install_hf_snapshot,
+                    ):
+                        installer = ModelInstaller(
+                            disk_usage_fn=lambda _path: _FakeDiskUsage(100 * 1024 * 1024 * 1024),
+                        )
+                        result = installer.install("opus_mt", src_lang="fr", tgt_lang="de")
+                        expected = get_hf_snapshot_dir("Helsinki-NLP/opus-mt-fr-de", create=False)
+
+        self.assertTrue(result.ok)
+        self.assertEqual(Path(result.installed_dir), expected)
+        self.assertEqual(captured["model_ref"], "Helsinki-NLP/opus-mt-fr-de")
+        self.assertEqual(captured["status_key"], "opus_mt|fr|de")
+
+    def test_install_rejects_unsupported_pair_before_download(self):
+        installer = ModelInstaller()
+
+        result = installer.install("argos", src_lang="it", tgt_lang="ru")
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status, "not_installed")
+        self.assertIn("unsupported for it->ru", result.message)
 
     def test_not_supported_model_is_not_installable_and_not_selectable(self):
         installer = ModelInstaller()

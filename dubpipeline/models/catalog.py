@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -16,6 +17,9 @@ InstallerKind = Literal["hf_snapshot", "argos_package", "none"]
 
 NOT_INSTALLED_REASON = "not installed"
 NOT_SUPPORTED_REASON = "not supported yet"
+UNSUPPORTED_PAIR_PREFIX = "unsupported for "
+_PAIR_AWARE_MODEL_IDS = {"opus_mt", "argos"}
+_PAIR_AWARE_LANGS = {"en", "de", "fr", "es", "ru"}
 
 _HF_REQUIRED_CORE_FILES = {
     "config.json",
@@ -169,6 +173,38 @@ def _check_hf_model_available(spec: ModelSpec) -> tuple[bool, str]:
     return False, NOT_INSTALLED_REASON
 
 
+def _normalize_lang_code(lang: str | None, *, default: str) -> str:
+    code = (lang or "").strip().lower()
+    return code or default
+
+
+def unsupported_pair_reason(src_lang: str, tgt_lang: str) -> str:
+    return f"{UNSUPPORTED_PAIR_PREFIX}{src_lang}->{tgt_lang}"
+
+
+def is_unsupported_pair_reason(reason: str | None) -> bool:
+    return str(reason or "").startswith(UNSUPPORTED_PAIR_PREFIX)
+
+
+def _pair_supported(spec: ModelSpec, src_lang: str, tgt_lang: str) -> bool:
+    if spec.id not in _PAIR_AWARE_MODEL_IDS:
+        return True
+    if src_lang == tgt_lang:
+        return False
+    return src_lang in _PAIR_AWARE_LANGS and tgt_lang in _PAIR_AWARE_LANGS
+
+
+def resolve_model_spec(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> ModelSpec:
+    spec = get_model_spec(model_id)
+    src = _normalize_lang_code(src_lang, default="en")
+    tgt = _normalize_lang_code(tgt_lang, default="ru")
+    if spec.id == "opus_mt":
+        return replace(spec, model_ref=f"Helsinki-NLP/opus-mt-{src}-{tgt}")
+    if spec.id == "argos":
+        return replace(spec, model_ref=f"argos-{src}-{tgt}")
+    return spec
+
+
 def _argos_lang_pair(spec: ModelSpec) -> tuple[str, str]:
     ref = (spec.model_ref or "").strip().lower()
     if ref.startswith("argos-"):
@@ -310,8 +346,8 @@ def get_model_spec(model_id: str) -> ModelSpec:
         raise ValueError(f"Unknown translation model_id: '{model_id}'") from exc
 
 
-def get_model_install_dir(model_id: str) -> Path | None:
-    spec = get_model_spec(model_id)
+def get_model_install_dir(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> Path | None:
+    spec = resolve_model_spec(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
     if spec.installer == "hf_snapshot":
         return get_hf_snapshot_dir(spec.model_ref, create=False)
     if spec.installer == "argos_package":
@@ -319,8 +355,18 @@ def get_model_install_dir(model_id: str) -> Path | None:
     return None
 
 
-def get_model_status(model_id: str) -> ModelStatus:
-    spec = get_model_spec(model_id)
+def get_model_status(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> ModelStatus:
+    spec = resolve_model_spec(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+    src = _normalize_lang_code(src_lang, default="en")
+    tgt = _normalize_lang_code(tgt_lang, default="ru")
+
+    if not _pair_supported(spec, src, tgt):
+        return ModelStatus(
+            available=False,
+            enabled=False,
+            reason=unsupported_pair_reason(src, tgt),
+        )
+
     available, reason = spec.local_check(spec)
 
     if not spec.supported:
@@ -334,12 +380,12 @@ def is_model_available(model: ModelSpec) -> bool:
     return get_model_status(model.id).available
 
 
-def resolve_default_model_id() -> str:
+def resolve_default_model_id(src_lang: str | None = None, tgt_lang: str | None = None) -> str:
     primary = "nllb_200_1_3b"
-    if get_model_status(primary).enabled:
+    if get_model_status(primary, src_lang=src_lang, tgt_lang=tgt_lang).enabled:
         return primary
     for fallback in ("opus_mt", "argos"):
-        if get_model_status(fallback).enabled:
+        if get_model_status(fallback, src_lang=src_lang, tgt_lang=tgt_lang).enabled:
             return fallback
     return primary
 
@@ -378,7 +424,7 @@ def _tier_label(tier: Tier) -> str:
     return f"Tier {tier}"
 
 
-def build_model_choices() -> list[ModelChoice]:
+def build_model_choices(src_lang: str | None = None, tgt_lang: str | None = None) -> list[ModelChoice]:
     choices: list[ModelChoice] = []
     for tier in ("A", "B", "C"):
         tier_label = _tier_label(tier)
@@ -398,10 +444,12 @@ def build_model_choices() -> list[ModelChoice]:
         )
 
         for spec in [m for m in _MODEL_SPECS if m.tier == tier]:
-            status = get_model_status(spec.id)
+            status = get_model_status(spec.id, src_lang=src_lang, tgt_lang=tgt_lang)
             suffix = ""
             if status.reason == NOT_SUPPORTED_REASON:
                 suffix = " (planned)"
+            elif is_unsupported_pair_reason(status.reason):
+                suffix = f" ({status.reason})"
             elif status.reason.startswith("failed"):
                 suffix = f" ({status.reason})"
             elif not status.available:
@@ -409,6 +457,8 @@ def build_model_choices() -> list[ModelChoice]:
 
             color = "black"
             if status.reason == NOT_SUPPORTED_REASON:
+                color = "gray45"
+            elif is_unsupported_pair_reason(status.reason):
                 color = "gray45"
             elif status.reason.startswith("failed"):
                 color = "firebrick"
