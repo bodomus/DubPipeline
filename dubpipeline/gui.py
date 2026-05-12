@@ -609,14 +609,56 @@ def ensure_translation_model_ready_for_start(
     if not selected_model_id:
         return None
 
+    try:
+        selected_spec = resolve_model_spec(selected_model_id, src_lang, tgt_lang)
+        selected_status = get_model_status(selected_model_id, src_lang, tgt_lang)
+    except Exception as exc:
+        msg = f"Translation model cannot be checked after install: {exc}"
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
+    if not selected_status.enabled:
+        msg = model_not_installed_message(selected_spec.label, src_lang, tgt_lang)
+        sg.popup_error(msg, title="Translation model required", keep_on_top=True)
+        _emit_info(window, msg)
+        return None
+
     persist_languages(src_lang, tgt_lang)
     persist_translation_model(selected_model_id, src_lang=src_lang, tgt_lang=tgt_lang)
     window["-TRANSLATION_MODEL_ID-"].update(selected_model_id)
     summary_text, summary_color = _translation_summary(selected_model_id, src_lang, tgt_lang)
     window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
-    selected_spec = get_model_spec(selected_model_id)
-    _emit_info(window, f"Translation model selected: {selected_spec.label} [{selected_spec.id}]")
+    _emit_info(
+        window,
+        f"Translation model selected: {selected_spec.label} [{selected_spec.id}] "
+        f"for {src_lang} -> {tgt_lang}: {selected_spec.model_ref}",
+    )
     return selected_model_id
+
+
+def sync_translation_start_values(
+    values: dict,
+    model_id: str,
+    *,
+    src_lang: str,
+    tgt_lang: str,
+) -> tuple[bool, str]:
+    src = normalize_language_code(src_lang, default="en")
+    tgt = normalize_language_code(tgt_lang, default="ru")
+    selected_model_id = (model_id or "").strip()
+    if not selected_model_id:
+        return False, "Translation model is not configured. Open Models and choose an installed model."
+
+    spec = resolve_model_spec(selected_model_id, src, tgt)
+    status = get_model_status(selected_model_id, src, tgt)
+    if not status.enabled:
+        return False, model_not_installed_message(spec.label, src, tgt)
+
+    values["-TRANSLATION_MODEL_ID-"] = spec.id
+    values["-LANG_SRC-"] = src
+    values["-LANG_DST-"] = tgt
+    return True, spec.model_ref
 
 
 def persist_languages(src_lang: str, tgt_lang: str) -> None:
@@ -1694,7 +1736,22 @@ def main():
                 if not ready_model_id:
                     continue
                 current_translation_model_id = ready_model_id
-                values["-TRANSLATION_MODEL_ID-"] = ready_model_id
+                try:
+                    synced, sync_message = sync_translation_start_values(
+                        values,
+                        ready_model_id,
+                        src_lang=current_src_lang,
+                        tgt_lang=current_tgt_lang,
+                    )
+                except Exception as exc:
+                    synced = False
+                    sync_message = f"Translation model cannot be checked: {exc}"
+                if not synced:
+                    sg.popup_error(sync_message, title="Translation model required", keep_on_top=True)
+                    _emit_info(window, sync_message)
+                    continue
+                window["-TRANSLATION_MODEL_ID-"].update(values["-TRANSLATION_MODEL_ID-"])
+                _emit_info(window, f"Translation model ready for start: {sync_message}")
             run_count = handle_start_event(values, current_steps, video_exts, window, voice_id_by_display, progress_state)
             if run_count:
                 last_run_count = run_count
