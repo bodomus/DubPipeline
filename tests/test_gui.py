@@ -243,6 +243,50 @@ class GuiUnifiedInputTests(unittest.TestCase):
         self.assertEqual(selected, "C:/tmp/videos")
         popup_get_folder.assert_called_once_with("Select folder with videos", no_window=True)
 
+    def test_translation_start_sync_preserves_pair_specific_opus_model_ref(self):
+        from dubpipeline.gui import sync_translation_start_values
+        from dubpipeline.models.catalog import ModelStatus
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pipeline_file = Path(tmp) / "sample.pipeline.yaml"
+            values = {
+                "-PROJECT-": "sample",
+                "-OUT-": tmp,
+                "-INPUT_MODE-": "file",
+                "-INPUT_PATH-": "sample.mp4",
+                "-SRC_DIR-": False,
+                "-MODES-": "Add",
+                "-GPU-": False,
+                "-REBUILD-": False,
+                "-SRT-": False,
+                "-CLEANUP-": False,
+                "-MOVE_TO_DIR-": "",
+                "-UPDATE_EXISTING_FILE-": False,
+                "-TRANSLATION_MODEL_ID-": "opus_mt",
+                "-LANG_SRC-": "en",
+                "-LANG_DST-": "ru",
+            }
+
+            with patch("dubpipeline.gui.get_model_status", return_value=ModelStatus(True, True)):
+                synced, model_ref = sync_translation_start_values(
+                    values,
+                    "opus_mt",
+                    src_lang="en",
+                    tgt_lang="de",
+                )
+
+            self.assertTrue(synced)
+            self.assertEqual(model_ref, "Helsinki-NLP/opus-mt-en-de")
+            self.assertEqual(values["-LANG_SRC-"], "en")
+            self.assertEqual(values["-LANG_DST-"], "de")
+
+            save_pipeline_yaml(values, pipeline_file)
+            cfg = load_pipeline_config_ex(pipeline_file)
+
+        self.assertEqual(cfg.translation.model_id, "opus_mt")
+        self.assertEqual(cfg.translation.model_ref, "Helsinki-NLP/opus-mt-en-de")
+        self.assertEqual(cfg.translate.hf_model, "Helsinki-NLP/opus-mt-en-de")
+
 
 if __name__ == "__main__":
     unittest.main()

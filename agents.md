@@ -14,6 +14,7 @@ DubPipeline is a local media dubbing pipeline. Make focused, minimal, verifiable
 - Do not refactor unrelated code.
 - Preserve existing behavior unless the task explicitly requires changes.
 - State assumptions clearly in the final response.
+- Use review.md for review generated code. 
 
 ---
 
@@ -247,3 +248,4 @@ Be specific. Do not claim tests passed unless they were actually run.
 ## Subdirectory overrides
 More specific `AGENTS.md` files in subfolders may define stricter local rules.
 When working in a subdirectory, prefer the nearest applicable instructions.
+
