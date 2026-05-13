@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+", re.UNICODE)
+_TORCH_26_LOAD_ERROR_MARKERS = (
+    "upgrade torch to at least v2.6",
+    "upgrade torch to at least 2.6",
+    "cve-2025-32434",
+)
 
 _NLLB_LANG_MAP = {
     "en": "eng_Latn",
@@ -39,6 +44,36 @@ def model_not_installed_message(model_label: str, src_lang: str, tgt_lang: str) 
         f"Translation model '{model_label}' for {pair} is not installed. "
         "Cannot continue translation. Open Models -> Install to download it."
     )
+
+
+def _parse_torch_version(version: str) -> tuple[int, int, int]:
+    match = re.match(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?", version or "")
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part or 0) for part in match.groups())
+
+
+def _torch_version_is_below_26(version: str) -> bool:
+    return _parse_torch_version(version) < (2, 6, 0)
+
+
+def _is_torch_26_bin_weights_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _TORCH_26_LOAD_ERROR_MARKERS)
+
+
+def _has_bin_weights_without_safetensors(model_ref: str) -> bool:
+    model_dir = Path(model_ref)
+    if not model_dir.exists() or not model_dir.is_dir():
+        return False
+    try:
+        names = {path.name for path in model_dir.iterdir() if path.is_file()}
+    except OSError:
+        return False
+
+    has_bin = bool({"pytorch_model.bin", "pytorch_model.bin.index.json"}.intersection(names))
+    has_safetensors = bool({"model.safetensors", "model.safetensors.index.json"}.intersection(names))
+    return has_bin and not has_safetensors
 
 
 class TranslationModelError(RuntimeError):
@@ -137,6 +172,20 @@ class TranslatorService:
         src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
         tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
         return model_not_installed_message(self._active.label, src_lang, tgt_lang)
+
+    def _torch_bin_weights_message(self, model_ref: str, torch_version: str) -> str:
+        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
+        pair = f"{src_lang}->{tgt_lang}"
+        location = f" at {model_ref}" if model_ref else ""
+        version = torch_version or "an older version"
+        return (
+            f"Translation model '{self._active.label}' for {pair} is installed{location}, "
+            "but cannot be loaded because this environment uses "
+            f"PyTorch {version} and the local model has PyTorch .bin weights without safetensors. "
+            "Modern Transformers blocks loading these weights with torch < 2.6 due to CVE-2025-32434. "
+            "Upgrade torch and torchaudio to >= 2.6, or install a safetensors version of the model."
+        )
 
     def _resolve_active_model(self, cfg: "PipelineConfig") -> ActiveModel:
         model_id = (cfg.translation.model_id or "").strip()
@@ -242,6 +291,15 @@ class TranslatorService:
                 "Transformers backend is unavailable. Install dependencies for translation backend."
             ) from exc
 
+        torch_version = str(getattr(torch, "__version__", ""))
+        if (
+            _has_bin_weights_without_safetensors(model_ref)
+            and _torch_version_is_below_26(torch_version)
+        ):
+            raise TranslationModelUnavailableError(
+                self._torch_bin_weights_message(model_ref, torch_version)
+            )
+
         tokenizer = AutoTokenizer.from_pretrained(model_ref, local_files_only=True)
 
         load_kwargs = {"local_files_only": True}
@@ -262,6 +320,10 @@ class TranslatorService:
                     **load_kwargs,
                 )
             except Exception as exc:
+                if _is_torch_26_bin_weights_error(exc):
+                    raise TranslationModelUnavailableError(
+                        self._torch_bin_weights_message(model_ref, torch_version)
+                    ) from exc
                 raise TranslationModelUnavailableError(self._model_not_installed_message()) from exc
 
         model.eval()

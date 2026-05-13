@@ -12,7 +12,7 @@ from dubpipeline.config import PipelineConfig
 from dubpipeline.models.catalog import build_model_choices, get_model_status
 from dubpipeline.models.installer import ModelInstaller, _format_progress_message
 from dubpipeline.models.storage import get_hf_snapshot_dir
-from dubpipeline.translation.service import TranslatorService
+from dubpipeline.translation.service import TranslationModelUnavailableError, TranslatorService
 
 
 class _FakeDiskUsage:
@@ -193,6 +193,91 @@ class TranslationOfflineSmokeTests(unittest.TestCase):
         self.assertEqual(Path(model_ref), model_dir)
         self.assertTrue(bool(tokenizer_kwargs.get("local_files_only")))
         self.assertTrue(bool(model_kwargs.get("local_files_only")))
+
+    def test_hf_bin_weights_torch_26_error_is_reported_as_load_diagnostic(self):
+        class FakeTokenizer:
+            @classmethod
+            def from_pretrained(cls, _model_ref, **_kwargs):
+                return object()
+
+        class FakeModel:
+            @classmethod
+            def from_pretrained(cls, _model_ref, **kwargs):
+                if kwargs.get("use_safetensors"):
+                    raise OSError("No safetensors weights found")
+                raise ValueError("Due to CVE-2025-32434, upgrade torch to at least v2.6 to use torch.load")
+
+        fake_torch = types.SimpleNamespace(
+            __version__="2.5.1+cu124",
+            float16="float16",
+            cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None),
+        )
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=FakeTokenizer,
+            AutoModelForSeq2SeqLM=FakeModel,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
+                model_dir = get_hf_snapshot_dir("Helsinki-NLP/opus-mt-en-de", create=True)
+                (model_dir / "config.json").write_text("{}", encoding="utf-8")
+                (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+                (model_dir / "model.safetensors").write_bytes(b"00")
+
+                cfg = PipelineConfig(project_name="sample", project_dir=Path(tmp))
+                cfg.languages.src = "en"
+                cfg.languages.tgt = "de"
+                cfg.translation.model_id = "opus_mt"
+                cfg.usegpu = False
+
+                TranslatorService._HF_CACHE.clear()
+                with patch.dict("sys.modules", {"torch": fake_torch, "transformers": fake_transformers}):
+                    service = TranslatorService(cfg)
+                    with self.assertRaises(TranslationModelUnavailableError) as ctx:
+                        service._load_hf()
+
+        message = str(ctx.exception)
+        self.assertIn("installed", message)
+        self.assertIn("cannot be loaded", message)
+        self.assertIn("torch < 2.6", message)
+        self.assertIn("CVE-2025-32434", message)
+        self.assertNotIn("not installed", message)
+
+    def test_hf_bin_weights_without_safetensors_preflight_reports_torch_upgrade(self):
+        fake_torch = types.SimpleNamespace(
+            __version__="2.5.1+cu124",
+            float16="float16",
+            cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None),
+        )
+        fake_transformers = types.SimpleNamespace(
+            AutoTokenizer=types.SimpleNamespace(from_pretrained=lambda *_args, **_kwargs: object()),
+            AutoModelForSeq2SeqLM=types.SimpleNamespace(from_pretrained=lambda *_args, **_kwargs: object()),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DUBPIPELINE_MODELS_ROOT": tmp}):
+                model_dir = get_hf_snapshot_dir("Helsinki-NLP/opus-mt-en-de", create=True)
+                (model_dir / "config.json").write_text("{}", encoding="utf-8")
+                (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+                (model_dir / "pytorch_model.bin").write_bytes(b"00")
+
+                cfg = PipelineConfig(project_name="sample", project_dir=Path(tmp))
+                cfg.languages.src = "en"
+                cfg.languages.tgt = "de"
+                cfg.translation.model_id = "opus_mt"
+                cfg.usegpu = False
+
+                TranslatorService._HF_CACHE.clear()
+                with patch.dict("sys.modules", {"torch": fake_torch, "transformers": fake_transformers}):
+                    service = TranslatorService(cfg)
+                    with self.assertRaises(TranslationModelUnavailableError) as ctx:
+                        service._load_hf()
+
+        message = str(ctx.exception)
+        self.assertIn(str(model_dir), message)
+        self.assertIn("PyTorch 2.5.1+cu124", message)
+        self.assertIn(".bin weights without safetensors", message)
+        self.assertNotIn("not installed", message)
 
 
 if __name__ == "__main__":
