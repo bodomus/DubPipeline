@@ -1,23 +1,19 @@
-from datetime import timedelta
-
-from ..config import PipelineConfig
-
-import os
 import json
+import os
 import pathlib
-import re
-from typing import List
+from datetime import timedelta
 
 import torch
 import whisperx
-from rich import print
-from dubpipeline.utils.logging import info, step, warn, error, debug
+
 from dubpipeline.consts import Const
+from dubpipeline.utils.logging import info, step, warn, error
+from ..config import PipelineConfig
 
 # === НАСТРОЙКИ =================================================================
 
 # Путь к аудио (поставьте сюда тот же файл, что вы используете для SRT-теста)
-#AUDIO_PATH = Path()
+# AUDIO_PATH = Path()
 
 # Модель Whisper / Faster-Whisper через whisperx
 
@@ -26,6 +22,7 @@ from dubpipeline.consts import Const
 # OUTPUT_SRT = "out/video_sample.from_segments.en.srt"
 
 # === ВСПОМОГАТЕЛЬНАЯ ЛОГИКА ====================================================
+
 
 def merge_words_to_segments(words, max_gap=0.8, max_seg_dur=20.0, max_seg_chars=350):
     """
@@ -80,8 +77,8 @@ def merge_words_to_segments(words, max_gap=0.8, max_seg_dur=20.0, max_seg_chars=
             "text": (w0.get("text") or "").strip(),
         }
 
-        same_speaker = (w["speaker"] == current["speaker"])
-        small_gap = (w["start"] - current["end"] <= max_gap)
+        same_speaker = w["speaker"] == current["speaker"]
+        small_gap = w["start"] - current["end"] <= max_gap
 
         if same_speaker and small_gap:
             prospective_end = w["end"]
@@ -89,7 +86,9 @@ def merge_words_to_segments(words, max_gap=0.8, max_seg_dur=20.0, max_seg_chars=
             prospective_text = (current["text"] + " " + w["text"]).strip()
 
             # если после добавления мы всё ещё в лимитах — продолжаем копить
-            if (prospective_dur <= max_seg_dur) and (len(prospective_text) <= max_seg_chars):
+            if (prospective_dur <= max_seg_dur) and (
+                len(prospective_text) <= max_seg_chars
+            ):
                 current["text"] = prospective_text
                 current["end"] = prospective_end
                 continue
@@ -143,11 +142,15 @@ def post_merge_segments_for_tts(
         nxt_end = float(nxt.get("end", nxt_start))
 
         gap = nxt_start - cur_end
-        same_speaker = (cur.get("speaker") == nxt.get("speaker"))
+        same_speaker = cur.get("speaker") == nxt.get("speaker")
         can_speaker = same_speaker or bool(allow_cross_speaker)
 
         # Решаем, стоит ли склеивать: маленький gap + хотя бы один из соседних сегментов короткий
-        should_merge = (gap <= float(max_merge_gap)) and can_speaker and (is_short(cur) or is_short(nxt))
+        should_merge = (
+            (gap <= float(max_merge_gap))
+            and can_speaker
+            and (is_short(cur) or is_short(nxt))
+        )
 
         # Не даём сегментам разрастаться слишком сильно (чтобы не ломать ритм и не копить ошибки)
         merged_dur = max(0.0, nxt_end - cur_start)
@@ -170,13 +173,29 @@ def post_merge_segments_for_tts(
     return merged
 
 
-
 # --- EXTRA POST-PROCESS: merge "dangling tail" segments -------------------
 _DANGLING_END = {
-    "with", "to", "and", "or", "so", "but", "because", "for",
-    "of", "in", "on", "at", "from", "as", "by", "into", "over", "under",
+    "with",
+    "to",
+    "and",
+    "or",
+    "so",
+    "but",
+    "because",
+    "for",
+    "of",
+    "in",
+    "on",
+    "at",
+    "from",
+    "as",
+    "by",
+    "into",
+    "over",
+    "under",
 }
-_PUNCT_STRIP = ' \t\r\n.,!?;:()[]{}"\'“”‘’'
+_PUNCT_STRIP = " \t\r\n.,!?;:()[]{}\"'“”‘’"
+
 
 def merge_dangling_segments(
     segments: list[dict],
@@ -196,7 +215,7 @@ def merge_dangling_segments(
         return []
 
     # На всякий случай сортируем по времени начала
-    segs = [dict(s) for s in sorted(segments, key=lambda s: float(s.get('start', 0.0)))]
+    segs = [dict(s) for s in sorted(segments, key=lambda s: float(s.get("start", 0.0)))]
 
     out: list[dict] = []
     i = 0
@@ -205,25 +224,29 @@ def merge_dangling_segments(
 
         if i + 1 < len(segs):
             nxt = segs[i + 1]
-            cur_end = float(cur.get('end', float(cur.get('start', 0.0))))
-            nxt_start = float(nxt.get('start', cur_end))
+            cur_end = float(cur.get("end", float(cur.get("start", 0.0))))
+            nxt_start = float(nxt.get("start", cur_end))
             gap = nxt_start - cur_end
 
             if gap >= 0.0 and gap <= float(max_gap):
-                if (not require_same_speaker) or (cur.get('speaker') == nxt.get('speaker')):
-                    cur_text = (cur.get('text') or '').strip()
-                    nxt_text = (nxt.get('text') or '').strip()
+                if (not require_same_speaker) or (
+                    cur.get("speaker") == nxt.get("speaker")
+                ):
+                    cur_text = (cur.get("text") or "").strip()
+                    nxt_text = (nxt.get("text") or "").strip()
 
                     # last word of current segment (strip punctuation)
                     tail = cur_text.rstrip(_PUNCT_STRIP)
                     parts = tail.split()
-                    last_word = (parts[-1].lower() if parts else '')
+                    last_word = parts[-1].lower() if parts else ""
 
                     nxt_words = len(nxt_text.split())
-                    if last_word in _DANGLING_END and 0 < nxt_words <= int(max_next_words):
+                    if last_word in _DANGLING_END and 0 < nxt_words <= int(
+                        max_next_words
+                    ):
                         # merge nxt into cur
-                        cur['text'] = (cur_text + ' ' + nxt_text).strip()
-                        cur['end'] = float(nxt.get('end', cur_end))
+                        cur["text"] = (cur_text + " " + nxt_text).strip()
+                        cur["end"] = float(nxt.get("end", cur_end))
                         i += 2
                         out.append(cur)
                         continue
@@ -233,13 +256,15 @@ def merge_dangling_segments(
 
     return out
 
+
 # === ОСНОВНОЙ PIPELINE =========================================================
 
-def run(cfg:PipelineConfig):
-    #Создание json файла с английским текстом и временными метками.
+
+def run(cfg: PipelineConfig):
+    # Создание json файла с английским текстом и временными метками.
     # Папка для результатов
-    #OUT_DIR = cfg.paths.out_dir
-    #OUT_DIR.mkdir(exist_ok=True)
+    # OUT_DIR = cfg.paths.out_dir
+    # OUT_DIR.mkdir(exist_ok=True)
 
     audio_path = pathlib.Path(cfg.paths.audio_wav)
     if not audio_path.exists():
@@ -256,11 +281,15 @@ def run(cfg:PipelineConfig):
     info(f"Audio: {audio_path}\n")
 
     # 1) Загружаем аудио
-    audio = whisperx.load_audio(str(audio_path), )
+    audio = whisperx.load_audio(
+        str(audio_path),
+    )
 
     # 2) ASR (Whisper / Faster-Whisper через whisperx)
     step("Loading ASR model...\n")
-    model = whisperx.load_model(Const.whisperx_model_name(), device, compute_type=compute_type)
+    model = whisperx.load_model(
+        Const.whisperx_model_name(), device, language="en", compute_type=compute_type
+    )
 
     step("Transcribing...\n")
     result = model.transcribe(audio, batch_size=Const.whisperx_batch_size())
@@ -283,8 +312,7 @@ def run(cfg:PipelineConfig):
     # 3) Alignment (wav2vec2) для точных таймкодов
     step("Loading alignment model...\n")
     model_a, metadata = whisperx.load_align_model(
-        language_code=result["language"],
-        device=device
+        language_code=result["language"], device=device
     )
 
     step("Aligning...\n")
@@ -294,7 +322,7 @@ def run(cfg:PipelineConfig):
         metadata,
         audio,
         device,
-        return_char_alignments=False
+        return_char_alignments=False,
     )
     # aligned_result["segments"][i]["words"] – слова с точными таймкодами
 
@@ -316,12 +344,14 @@ def run(cfg:PipelineConfig):
             if not text:
                 continue
 
-            words.append({
-                "speaker": speaker,
-                "start": float(w["start"]),
-                "end": float(w["end"]),
-                "text": text,
-            })
+            words.append(
+                {
+                    "speaker": speaker,
+                    "start": float(w["start"]),
+                    "end": float(w["end"]),
+                    "text": text,
+                }
+            )
 
     # 7) Склеиваем слова в более крупные сегменты по спикеру + паузам
     step("[STEP] Merging words to segments...\n")
@@ -333,7 +363,9 @@ def run(cfg:PipelineConfig):
         max_seg_dur=wm_max_seg_dur,
         max_seg_chars=wm_max_seg_chars,
     )
-    info(f"[INFO] Word-merge limits: max_seg_dur={wm_max_seg_dur:.2f}s, max_seg_chars={wm_max_seg_chars}\\n")
+    info(
+        f"[INFO] Word-merge limits: max_seg_dur={wm_max_seg_dur:.2f}s, max_seg_chars={wm_max_seg_chars}\\n"
+    )
     # 7.1) Пост-склейка для ускорения TTS (опционально, по env)
     raw_n = len(segments)
     try:
@@ -357,28 +389,41 @@ def run(cfg:PipelineConfig):
 
     # 7.2) Склейка "висячих хвостов" (dangling tails), чтобы не терять контекст на переводе/TTS.
     # Управляется env: DUBPIPELINE_WHISPERX_MERGE_DANGLING=1/0 (по умолчанию включено).
-    merge_dangling = os.environ.get('DUBPIPELINE_WHISPERX_MERGE_DANGLING', '1').strip().lower()
-    if merge_dangling not in {'0', 'false', 'no', 'off'}:
+    merge_dangling = (
+        os.environ.get("DUBPIPELINE_WHISPERX_MERGE_DANGLING", "1").strip().lower()
+    )
+    if merge_dangling not in {"0", "false", "no", "off"}:
         try:
-            max_gap = float(os.environ.get('DUBPIPELINE_WHISPERX_DANGLING_MAX_GAP', '1.20'))
+            max_gap = float(
+                os.environ.get("DUBPIPELINE_WHISPERX_DANGLING_MAX_GAP", "1.20")
+            )
         except Exception:
             max_gap = 1.20
         try:
-            max_next_words = int(os.environ.get('DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS', '6'))
+            max_next_words = int(
+                os.environ.get("DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS", "6")
+            )
         except Exception:
             max_next_words = 6
         before_d = len(segments)
-        segments = merge_dangling_segments(segments, max_gap=max_gap, max_next_words=max_next_words, require_same_speaker=True)
+        segments = merge_dangling_segments(
+            segments,
+            max_gap=max_gap,
+            max_next_words=max_next_words,
+            require_same_speaker=True,
+        )
         after_d = len(segments)
         if after_d != before_d:
-            info(f"[INFO] Segments dangling-merge: {before_d} -> {after_d} (max_gap={max_gap}, max_next_words={max_next_words})\n")
+            info(
+                f"[INFO] Segments dangling-merge: {before_d} -> {after_d} (max_gap={max_gap}, max_next_words={max_next_words})\n"
+            )
 
     # 7.3) Проставляем стабильные id (единый источник истины для следующих шагов)
     for i, s in enumerate(segments):
-        s['id'] = i
+        s["id"] = i
 
     # 8) Сохраняем результаты
-    info(f"[SAVE] Segments → {cfg.paths.segments_file}")
+    info(f"[SAVE] Segments -> {cfg.paths.segments_file}")
     with open(pathlib.Path(cfg.paths.segments_file), "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
 
@@ -388,6 +433,7 @@ def run(cfg:PipelineConfig):
         if rel not in {"0", "false", "no", "off"}:
             try:
                 import gc
+
                 # try to drop model refs
                 try:
                     del model
@@ -416,8 +462,7 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
         if hasattr(whisperx, "DiarizationPipeline"):
             step("Running diarization via DiarizationPipeline...\n")
             diarize_model = whisperx.DiarizationPipeline(
-                device=device,
-                use_auth_token=hf_token
+                device=device, use_auth_token=hf_token
             )
             diarize_segments = diarize_model(audio)
             result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
@@ -427,14 +472,15 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
         if hasattr(whisperx, "load_diarization_model"):
             step("[STEP] Running diarization via load_diarization_model...\n")
             diarize_model = whisperx.load_diarization_model(
-                device=device,
-                use_auth_token=hf_token
+                device=device, use_auth_token=hf_token
             )
             diarize_segments = diarize_model(audio)
             result = whisperx.assign_word_speakers(diarize_segments, aligned_result)
             return result
 
-        warn("[WARN] В установленной версии whisperx нет DiarizationPipeline/load_diarization_model.\n")
+        warn(
+            "[WARN] В установленной версии whisperx нет DiarizationPipeline/load_diarization_model.\n"
+        )
         warn("[WARN] Продолжаем без диаризации, ставим SPEAKER_00 для всех слов.\n")
 
     except Exception as e:
@@ -449,6 +495,7 @@ def run_diarization_safe(audio, aligned_result, device="cpu"):
 
     return aligned_result
 
+
 # 3. Сохраняем в SRT (без диаризации — пока)
 def format_timestamp(seconds: float) -> str:
     td = timedelta(seconds=seconds)
@@ -459,4 +506,3 @@ def format_timestamp(seconds: float) -> str:
     secs = total_seconds % 60
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
-
