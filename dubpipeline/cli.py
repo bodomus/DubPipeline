@@ -19,6 +19,7 @@ from dubpipeline.utils.run_meta import log_run_header
 from dubpipeline.utils.timing import timed_block, timed_run
 from .config import (
     PipelineConfig,
+    SUPPORTED_SOURCE_LANGUAGES,
     SUPPORTED_TRANSLATION_LANGUAGES,
     load_pipeline_config_ex,
     normalize_language_code,
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     supported_langs_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
+    supported_source_langs_text = ", ".join(SUPPORTED_SOURCE_LANGUAGES)
 
     run_parser = subparsers.add_parser("run", help="Run the video pipeline.")
     run_parser.add_argument("pipeline_file", help="Path to *.pipeline.yaml")
@@ -65,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--lang-src",
         default=None,
         metavar="LANG",
-        help=f"Source language. Supported values: {supported_langs_text}.",
+        help=f"Source language. Supported values: {supported_source_langs_text}.",
     )
     run_parser.add_argument(
         "--lang-dst",
@@ -144,14 +146,15 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
 
     cli_set = list(args.set)
     supported_langs_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
+    supported_source_langs_text = ", ".join(SUPPORTED_SOURCE_LANGUAGES)
     if args.move_to_dir is not None:
         cli_set.append(f"output.move_to_dir={args.move_to_dir}")
     if args.out is not None:
         cli_set.append(f"paths.out_dir={args.out}")
     if args.lang_src is not None:
         src_lang = normalize_language_code(args.lang_src, default="")
-        if src_lang not in SUPPORTED_TRANSLATION_LANGUAGES:
-            parser.error(f"--lang-src must be one of: {supported_langs_text}")
+        if src_lang not in SUPPORTED_SOURCE_LANGUAGES:
+            parser.error(f"--lang-src must be one of: {supported_source_langs_text}")
         cli_set.append(f"languages.src={src_lang}")
     if args.lang_dst is not None:
         tgt_lang = normalize_language_code(args.lang_dst, default="")

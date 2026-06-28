@@ -260,6 +260,33 @@ def merge_dangling_segments(
 # === ОСНОВНОЙ PIPELINE =========================================================
 
 
+def _configured_source_language(cfg: PipelineConfig) -> str:
+    return str(getattr(cfg.languages, "src", "") or "en").strip().lower() or "en"
+
+
+def _transcribe_kwargs(source_language: str) -> dict:
+    if source_language == "auto":
+        return {}
+    return {"language": source_language}
+
+
+def _alignment_language(configured_language: str, detected_language: str | None) -> str:
+    if configured_language == "auto":
+        return (detected_language or "").strip().lower()
+    return configured_language
+
+
+def _load_align_model(language_code: str, device: str):
+    try:
+        return whisperx.load_align_model(language_code=language_code, device=device)
+    except Exception as ex:
+        hint = (
+            f"WhisperX has no usable alignment model for language '{language_code}'. "
+            "If the source audio is English, rerun with --lang-src en."
+        )
+        raise RuntimeError(hint) from ex
+
+
 def run(cfg: PipelineConfig):
     # Создание json файла с английским текстом и временными метками.
     # Папка для результатов
@@ -279,6 +306,8 @@ def run(cfg: PipelineConfig):
     compute_type = "float16" if device == "cuda" else "int8"
     info(f"Device: {device}, compute_type: {compute_type}\n")
     info(f"Audio: {audio_path}\n")
+    configured_language = _configured_source_language(cfg)
+    info(f"[WhisperX] Configured source language: {configured_language}\n")
 
     # 1) Загружаем аудио
     audio = whisperx.load_audio(
@@ -288,11 +317,24 @@ def run(cfg: PipelineConfig):
     # 2) ASR (Whisper / Faster-Whisper через whisperx)
     step("Loading ASR model...\n")
     model = whisperx.load_model(
-        Const.whisperx_model_name(), device, language="en", compute_type=compute_type
+        Const.whisperx_model_name(), device, compute_type=compute_type
     )
 
     step("Transcribing...\n")
-    result = model.transcribe(audio, batch_size=Const.whisperx_batch_size())
+    result = model.transcribe(
+        audio,
+        batch_size=Const.whisperx_batch_size(),
+        **_transcribe_kwargs(configured_language),
+    )
+    detected_language = str(result.get("language") or "").strip().lower()
+    alignment_language = _alignment_language(configured_language, detected_language)
+    info(f"[WhisperX] Detected language: {detected_language or 'unknown'}\n")
+    info(f"[WhisperX] Alignment language: {alignment_language or 'unknown'}\n")
+    if not alignment_language:
+        raise RuntimeError(
+            "WhisperX could not determine an alignment language. "
+            "Set --lang-src to a concrete language, for example en."
+        )
     # result["segments"] — фразовые сегменты (без выравнивания по словам)
     segments = result["segments"]
     info(f"Segments: {len(segments)}\n")
@@ -311,9 +353,7 @@ def run(cfg: PipelineConfig):
 
     # 3) Alignment (wav2vec2) для точных таймкодов
     step("Loading alignment model...\n")
-    model_a, metadata = whisperx.load_align_model(
-        language_code=result["language"], device=device
-    )
+    model_a, metadata = _load_align_model(alignment_language, device)
 
     step("Aligning...\n")
     aligned_result = whisperx.align(

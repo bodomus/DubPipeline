@@ -86,9 +86,21 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             _build_cli_set(args, parser)
 
-    def test_lang_src_rejects_unsupported_language(self):
+    def test_lang_src_accepts_english_for_asr_language(self):
         parser = build_parser()
         args = parser.parse_args(["run", "video.pipeline.yaml", "--lang-src", "en"])
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("languages.src=en", cli_set)
+
+    def test_lang_src_accepts_auto_for_asr_language(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "video.pipeline.yaml", "--lang-src", "auto"])
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("languages.src=auto", cli_set)
+
+    def test_lang_src_rejects_unsupported_language(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "video.pipeline.yaml", "--lang-src", "it"])
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             with self.assertRaises(SystemExit):
@@ -107,6 +119,37 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 _validate_run_language_pair(cfg, parser, allow_legacy=False)
         self.assertIn("must be different", stderr.getvalue())
+
+    def test_english_source_is_allowed_when_translate_enabled(self):
+        parser = build_parser()
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "en"
+        cfg.languages.tgt = "ru"
+        cfg.steps.translate = True
+
+        _validate_run_language_pair(cfg, parser, allow_legacy=False)
+
+    def test_auto_source_is_rejected_when_translate_enabled(self):
+        parser = build_parser()
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "auto"
+        cfg.languages.tgt = "ru"
+        cfg.steps.translate = True
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                _validate_run_language_pair(cfg, parser, allow_legacy=False)
+        self.assertIn("cannot be used when the Translate step is enabled", stderr.getvalue())
+
+    def test_auto_source_is_allowed_when_translate_disabled(self):
+        parser = build_parser()
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "auto"
+        cfg.languages.tgt = "ru"
+        cfg.steps.translate = False
+
+        _validate_run_language_pair(cfg, parser, allow_legacy=False)
 
     def test_same_language_pair_is_allowed_when_translate_disabled(self):
         parser = build_parser()
