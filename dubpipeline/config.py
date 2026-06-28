@@ -48,6 +48,7 @@ class LanguagesConfig:
 
 
 SUPPORTED_TRANSLATION_LANGUAGES: tuple[str, ...] = ("de", "fr", "es", "ru")
+SUPPORTED_SOURCE_LANGUAGES: tuple[str, ...] = ("auto", "en") + SUPPORTED_TRANSLATION_LANGUAGES
 LEGACY_TRANSLATION_LANGUAGES: tuple[str, ...] = ("en",)
 MUX_LANGUAGE_TAGS: dict[str, str] = {
     "en": "eng",
@@ -84,13 +85,17 @@ def validate_translation_language_pair(
 ) -> str | None:
     src = normalize_language_code(src_lang, default=LanguagesConfig().src)
     tgt = normalize_language_code(tgt_lang, default=LanguagesConfig().tgt)
-    allowed = supported_translation_languages(allow_legacy=allow_legacy)
-    allowed_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
+    source_allowed = SUPPORTED_SOURCE_LANGUAGES
+    target_allowed = supported_translation_languages(allow_legacy=allow_legacy)
+    source_allowed_text = ", ".join(SUPPORTED_SOURCE_LANGUAGES)
+    target_allowed_text = ", ".join(SUPPORTED_TRANSLATION_LANGUAGES)
 
-    if src not in allowed:
-        return f"Unsupported source language '{src}'. Supported languages: {allowed_text}."
-    if tgt not in allowed:
-        return f"Unsupported target language '{tgt}'. Supported languages: {allowed_text}."
+    if src == "auto" and translate_enabled:
+        return "Source language 'auto' cannot be used when the Translate step is enabled. Set --lang-src to a concrete language, for example en."
+    if src not in source_allowed:
+        return f"Unsupported source language '{src}'. Supported languages: {source_allowed_text}."
+    if tgt not in target_allowed:
+        return f"Unsupported target language '{tgt}'. Supported languages: {target_allowed_text}."
     if translate_enabled and src == tgt:
         return "Source and target languages must be different when the Translate step is enabled."
     return None

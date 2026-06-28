@@ -136,6 +136,7 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 - `--glob "*.mp4"` — glob-фильтр входных файлов для директории (если вход — файл, ключ игнорируется с предупреждением).
 - `--out <dir>` — переопределяет `paths.out_dir` (рабочая/temp директория).
 - `--lang-src <code>` — переопределяет `languages.src`.
+  WhisperX uses this value for ASR and alignment. Use `--lang-src en` (or another concrete source language) to avoid wrong auto-detection; `--lang-src auto` keeps WhisperX auto-detection and is intended for ASR-only runs without the Translate step.
 - `--lang-dst <code>` — переопределяет `languages.tgt`.
 - `--steps ...` — управление шагами:
   - patch-форма: `--steps +asr,-tts,+merge` (включить/выключить поверх YAML);
