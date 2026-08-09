@@ -1,0 +1,12 @@
+.idea/
+.git/
+Build/
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+graphify-out/
+Build/Package/
+Build/TestHost/
+Reviews/
+Tickets/

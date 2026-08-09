@@ -13,8 +13,10 @@ except Exception:  # pragma: no cover
     TTS = None  # type: ignore[assignment]
 
 from dubpipeline.config import PipelineConfig
+from dubpipeline.text.technical_tokens import PLACEHOLDER_RE
+from dubpipeline.text.tts_normalizer import normalize_text_for_tts
 from dubpipeline.utils.concat_wavs import concat_wavs
-from dubpipeline.utils.logging import info, step, warn
+from dubpipeline.utils.logging import debug, info, step, warn
 
 _TTS_CACHE: dict[tuple[str, str], TTS] = {}
 _SPK_LATENTS_CACHE: dict[tuple[str, str], tuple[object, object, int]] = {}
@@ -166,6 +168,21 @@ def _segment_text(seg: dict) -> str:
     return _norm_text(str(seg.get("text_tgt") or seg.get("text_ru") or seg.get("text") or ""))
 
 
+def _segment_text_for_tts(seg: dict, language: str) -> str:
+    segment_id = str(seg.get("id", "")).strip() or "unknown"
+    text = _segment_text(seg)
+    unresolved = PLACEHOLDER_RE.findall(text)
+    if unresolved:
+        unique = ", ".join(sorted(set(unresolved)))
+        warn(f"[TTS] Unresolved technical placeholder segment_id={segment_id}: {unique}\n")
+        raise RuntimeError(f"Unresolved technical placeholder in TTS segment {segment_id}: {unique}")
+
+    normalized = normalize_text_for_tts(text, language=language)
+    if normalized != text:
+        debug(f'TTS normalization segment_id={segment_id} before="{text}" after="{normalized}"')
+    return normalized
+
+
 def synthesize_segments_to_wavs(
     segments: list[dict],
     cfg: PipelineConfig,
@@ -181,7 +198,15 @@ def synthesize_segments_to_wavs(
     out_dir.mkdir(parents=True, exist_ok=True)
     default_target_lang = (getattr(getattr(cfg, "languages", None), "tgt", "ru") or "ru").strip().lower() or "ru"
     language = (lang or default_target_lang).strip().lower() or default_target_lang
-    planned_paths: list[Path] = [out_dir / f"{_segment_stem(seg, i)}.wav" for i, seg in enumerate(segments) if _segment_text(seg)]
+    prepared: list[tuple[int, dict, str, Path]] = []
+    planned_paths: list[Path] = []
+    for index, seg in enumerate(segments):
+        text = _segment_text_for_tts(seg, language)
+        if not text:
+            continue
+        out_wav = out_dir / f"{_segment_stem(seg, index)}.wav"
+        prepared.append((index, seg, text, out_wav))
+        planned_paths.append(out_wav)
 
     if plan:
         info(f"[TTS][plan] segments={len(planned_paths)} out_dir={out_dir}\n")
@@ -199,12 +224,7 @@ def synthesize_segments_to_wavs(
         from dubpipeline.utils.progress import SegmentProgress
         progress = SegmentProgress(total=len(planned_paths))
 
-    for index, seg in enumerate(segments):
-        text = _segment_text(seg)
-        if not text:
-            continue
-
-        out_wav = out_dir / f"{_segment_stem(seg, index)}.wav"
+    for index, seg, text, out_wav in prepared:
         chunks = split_target_text(text, max_len=cfg.tts.max_target_chars, breaks=cfg.tts.breaks)
 
         if len(chunks) == 1:

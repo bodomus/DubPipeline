@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from dubpipeline.config import PipelineConfig
+from dubpipeline.text.technical_tokens import TechnicalTokenError, TechnicalTokenProtector
 from dubpipeline.translation.service import TranslationModelError, TranslatorService
-from dubpipeline.utils.logging import info, step
+from dubpipeline.utils.logging import info, step, warn
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
 
@@ -141,11 +142,27 @@ def translate_segments(
         if misses:
             sent_fallback = _sent_fallback_enabled()
             miss_keys = list(misses.keys())
-            miss_texts = [misses[k] for k in miss_keys]
-            ru_texts = translator.translate_texts(miss_texts, sent_fallback=sent_fallback)
-            new_items = list(zip(miss_keys, ru_texts))
+            protector = TechnicalTokenProtector()
+            protected_by_key = {k: protector.protect(misses[k]) for k in miss_keys}
+            miss_texts = [protected_by_key[k].text for k in miss_keys]
+            translated_texts = translator.translate_texts(miss_texts, sent_fallback=sent_fallback)
+            new_items: list[tuple[str, str]] = []
+            for cache_key, translated_text in zip(miss_keys, translated_texts):
+                protected = protected_by_key[cache_key]
+                try:
+                    restored_text = protector.restore(translated_text, protected.tokens)
+                except TechnicalTokenError as exc:
+                    warn(
+                        "[TRANSLATE] Failed to restore technical tokens "
+                        f"cache_key={cache_key}; using source text fallback: {exc}\n"
+                    )
+                    cached[cache_key] = misses[cache_key]
+                    continue
+
+                new_items.append((cache_key, restored_text))
+                cached[cache_key] = restored_text
+
             _cache_put_many(con, new_items)
-            cached.update({k: v for k, v in new_items})
 
         target_lang = (cfg.languages.tgt or "").strip().lower()
         translated = []

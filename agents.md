@@ -1,251 +1,353 @@
 # AGENTS.md
 
-## Purpose
-This file defines how Codex should work in the DubPipeline repository.
+## Mandatory pre-ticket workflow
 
-DubPipeline is a local media dubbing pipeline. Make focused, minimal, verifiable changes without breaking the existing workflow.
+Before starting any non-trivial ticket, feature, bugfix, refactor, investigation,
+implementation-planning task, performance change, model/runtime change, GUI change,
+CLI change, or code review:
 
----
+1. Resolve the repository root:
 
-## Working style
-- Read the relevant code path before editing.
-- For non-trivial tasks, make a short plan first.
-- Keep changes minimal, local, and reversible.
-- Do not refactor unrelated code.
-- Preserve existing behavior unless the task explicitly requires changes.
-- State assumptions clearly in the final response.
-- Use review.md for review generated code. 
+   ```powershell
+   git rev-parse --show-toplevel
+   ```
 
----
+2. Read the repository-root file `.codex/PRE_TICKET_WORKFLOW.md`.
+3. Use `$graphify-repository-analysis`.
+4. Use `$code-review-graph-analysis`.
+5. Execute all applicable preflight phases.
+6. Do not begin implementation until repository-intelligence preflight is complete.
+7. After implementation, update CRG, inspect impact radius, run validation, and
+   refresh Graphify when structural relationships changed.
+
+For spelling, formatting, comment-only, or metadata-only changes, the full graph
+preflight may be skipped when graph context cannot affect correctness.
 
 ## Project scope
-Typical pipeline:
-1. extract audio
-2. ASR
-3. optional diarization / alignment
-4. translation
-5. TTS
-6. timing / alignment of generated speech
-7. concatenation
-8. merge / mux into final output
 
-Do not change pipeline order unless explicitly required.
+This repository contains DubPipeline, a local video/audio dubbing and text-to-speech
+pipeline.
 
----
+Primary stack and runtime characteristics:
 
-## Important areas
-- `dubpipeline/cli.py` ó CLI entry
-- `dubpipeline/gui.py` ó GUI entry
-- `dubpipeline/steps/` ó pipeline steps
-- `dubpipeline/utils/` ó helpers
-- `tests/` ó automated tests
-- `README.md` / `docs/` ó documentation
-- config files (`.yaml`, `.yml`, `.json`) ó settings
+- Python;
+- Windows-first local execution;
+- CLI entry point: `python -m dubpipeline.cli`;
+- FreeSimpleGUI desktop GUI;
+- FFmpeg and FFplay subprocesses;
+- WhisperX and faster-whisper for ASR/alignment;
+- pyannote.audio for diarization/VAD;
+- translation backends including Argos and Hugging Face models;
+- XTTS v2 / Coqui TTS for speech synthesis;
+- PyTorch with CUDA 12.4;
+- GPU/CPU execution modes;
+- YAML configuration with precedence:
+  defaults -> pipeline YAML -> environment -> CLI;
+- model installation, caching, VRAM lifecycle, intermediate artifacts, and media muxing.
 
-If the actual structure differs, follow the repo instead of inventing a parallel one.
+Analysis must account for:
 
----
+- long-running and resource-heavy model initialization;
+- GPU VRAM ownership and release;
+- CPU fallback;
+- deterministic dry-run/plan behavior;
+- Windows multiprocessing `spawn`;
+- subprocess lifecycle and cancellation;
+- thread-to-GUI event delivery;
+- binary/media tool availability;
+- generated media and temporary artifacts;
+- partial pipeline execution and resume/rebuild semantics;
+- language-pair validation;
+- target-aware output paths and track metadata;
+- external subtitle behavior;
+- audio timing, alignment, loudness, ducking, and mux safety;
+- backward-compatible YAML, environment variables, and CLI aliases.
 
-## Technical assumptions
-- FFmpeg is a core dependency.
-- YAML config is part of the workflow.
-- Local models may be large and may be absent on the machine.
-- Windows is a primary development environment.
-- Existing CLI flags, config keys, output naming, and output layout are important.
+## Repository layout
 
----
+- `dubpipeline/` ‚Äî production package.
+- `dubpipeline/cli.py` ‚Äî CLI parser and execution entry point.
+- `dubpipeline/gui.py` ‚Äî FreeSimpleGUI application and process/thread coordination.
+- `dubpipeline/config.py` ‚Äî typed configuration and precedence rules.
+- `dubpipeline/steps/` ‚Äî pipeline step implementations.
+- `dubpipeline/models/` ‚Äî model catalog, status, and installation behavior.
+- `dubpipeline/translation/` ‚Äî translation services/backends.
+- `dubpipeline/utils/` ‚Äî logging, timing, audio concatenation, output movement, and utilities.
+- `tools/` ‚Äî legacy or diagnostic scripts; verify whether a script is still part of the supported flow.
+- `tests/` and/or `.tests/` ‚Äî automated tests, fixtures, and sample inputs; verify actual current layout.
+- `output/`, `out/`, generated segment directories, and media files ‚Äî generated runtime artifacts.
+- `.codex/` ‚Äî Codex workflows.
+- `.agents/skills/` ‚Äî repository-local Codex skills.
+- `.code-review-graph/` ‚Äî generated CRG state.
+- `graphify-out/` ‚Äî generated Graphify state.
 
-## Commands Codex should prefer
-### Install
-Use the repositoryís existing setup instructions first.
+Do not assume README examples represent the only current execution path. Verify current
+package entry points and tests.
 
-Typical examples:
-- `python -m venv .venv`
-- `.venv\\Scripts\\activate`
-- `pip install -r requirements.txt`
+## Generated and non-source directories
 
-### Run CLI
-- `python -m dubpipeline.cli --help`
-- `python -m dubpipeline.cli run <config-or-args>`
+Do not treat these as production source:
 
-### Run GUI
-- `python -m dubpipeline.gui`
+- `.git/`
+- `.idea/`
+- `.vs/`
+- `.vscode/`
+- `.venv*/`, `venv*/`, `env*/`
+- `__pycache__/`
+- `.pytest_cache/`
+- `.mypy_cache/`
+- `.tox/`, `.nox/`
+- build, dist, egg, wheel, and packaging output;
+- `output/`, `out/`, temp/work directories;
+- generated WAV, MP4, SRT, JSON, model, cache, and benchmark output;
+- `.code-review-graph/`
+- `graphify-out/`
+- downloaded third-party model repositories such as `stabilityai/`.
 
-### Tests
-Prefer targeted tests first:
-- `pytest -q`
-- `pytest tests/<relevant_test_file>.py -q`
+Do not index model weights, virtual environments, generated media, test output, or
+large caches in Graphify or CRG.
 
-### Validation before finishing
-Run the smallest sufficient validation set:
-1. syntax / lint if configured
-2. targeted tests for touched area
-3. focused CLI or functional check if appropriate
+Do not exclude project-owned YAML, Python, tests, or small textual fixtures merely
+because they live near generated output.
 
-Do not run expensive end-to-end media jobs unless needed.
+## Repository intelligence routing
 
----
+- Use Graphify for pipeline architecture, step ownership, configuration flow,
+  model/translation/TTS relationships, GUI-to-CLI orchestration, and cross-module
+  candidate discovery.
+- Use CRG for exact functions/classes, imports, callers, dependants, tests,
+  subprocess/process/thread relationships, and change-impact analysis.
+- Treat graph results as candidate evidence.
+- Use direct source inspection, `rg`, tests, dry-run output, logs, and actual runtime
+  behavior as authoritative.
+- Verify dynamic imports, environment-driven selection, subprocess entry points,
+  multiprocessing targets, callback wiring, and configuration-derived paths directly
+  in source.
+- When Graphify, CRG, README, and source disagree, current source plus executable tests
+  win.
 
-## Editing rules
-- Prefer editing existing files over creating new ones.
-- Do not create duplicate pipeline paths or alternate implementations unless requested.
-- Do not rename public CLI flags, config keys, output files, or pipeline steps unless explicitly required.
-- Keep logging style consistent with the existing codebase.
-- Preserve backward compatibility where practical.
+## Configuration contract
 
----
+`dubpipeline/config.py` is the primary configuration authority.
 
-## Coding rules
-- Follow existing naming and module boundaries.
-- Prefer simple, explicit code over clever abstractions.
-- Avoid adding new dependencies unless clearly necessary.
-- Add comments only where logic is non-obvious.
-- Be careful with subprocess handling, encodings, and Windows path quoting.
+Preserve and verify the precedence contract:
 
----
+```text
+code defaults
+  -> pipeline YAML
+  -> environment
+  -> CLI overrides
+```
 
-## FFmpeg rules
-- Treat FFmpeg command lines as business logic.
-- Do not casually rewrite working filter graphs.
-- If changing FFmpeg arguments:
-  - preserve stream mapping intentionally
-  - preserve codec/container compatibility intentionally
-  - preserve sample rate and channel assumptions intentionally
-  - verify output remains playable
-- Prefer minimal argument changes and explain why each changed flag matters.
+Configuration changes must inspect:
 
----
+- typed dataclasses;
+- normalization and validation;
+- YAML load/save;
+- environment variable mapping;
+- legacy environment compatibility;
+- CLI `--set` and explicit flags;
+- GUI load/save behavior;
+- derived paths;
+- dry-run/plan output;
+- backward compatibility.
 
-## Model rules
-- Do not assume a model is installed unless code confirms it.
-- Do not hardcode machine-specific model paths.
-- Keep ìinstalledî, ìavailableî, and ìplaceholder / unsupportedî states clearly separated.
-- Large model downloads must check free disk space first.
-- Prefer AppData or the existing configured storage location for model files.
+Do not introduce a second independent configuration source.
 
----
+Do not silently change default model, language, GPU mode, output path, cleanup policy,
+or merge mode.
 
-## Current product constraints
-- Qwen/Mistral entries may exist as placeholders; do not enable them unless the task explicitly implements real support.
-- Preserve clear UX around installed vs not installed models.
-- Do not activate unfinished features accidentally.
+## CLI safety
 
----
+The CLI is a public contract.
 
-## Config rules
-- Preserve existing config schema unless the task explicitly changes it.
-- If adding config keys:
-  - choose clear names
-  - document defaults
-  - keep backward compatibility where possible
-- Update example configs when config behavior changes.
+For `run` and `speak` changes:
 
----
+- preserve parser validation and mutual exclusions;
+- validate paths before expensive model loading;
+- preserve `--plan` as side-effect-free;
+- preserve `--in-file` / `--in-dir` semantics;
+- preserve `--steps` patch/list behavior;
+- preserve language-pair validation;
+- preserve target-aware outputs;
+- avoid creating directories or writing files in plan mode;
+- preserve documented exit behavior;
+- keep errors actionable;
+- update README and tests with public option changes.
 
-## GUI rules
-- Keep GUI changes minimal and task-focused.
-- Do not redesign the whole interface unless explicitly asked.
-- Preserve existing control flow and UX expectations.
-- If adding a control, wire it through actual pipeline behavior.
-- For long-running operations, use visible status/progress in the existing style.
+## GUI safety
 
----
+The GUI coordinates threads, subprocesses, and Windows multiprocessing.
 
-## CLI rules
-- Maintain compatibility with existing commands and flags unless explicitly asked otherwise.
-- If adding CLI options:
-  - document them
-  - validate inputs clearly
-  - connect them to actual pipeline behavior
-- Avoid silent behavior changes.
+For GUI changes:
 
----
+- keep GUI updates on the GUI event path;
+- avoid blocking the main event loop;
+- ensure worker process/subprocess cleanup;
+- preserve `spawn`-safe top-level multiprocessing targets;
+- do not pass unpicklable closures to child processes;
+- preserve cancellation and window-close cleanup;
+- verify preview/player process termination;
+- verify redirected stdout/stderr handling;
+- keep CLI behavior and GUI-generated YAML aligned;
+- validate file/folder mode and input-path semantics;
+- verify model installation/status feedback.
 
-## Logging and diagnostics
-- Keep logs practical and useful.
-- Prefer logs that help diagnose:
-  - missing files
-  - invalid config
-  - missing models
-  - FFmpeg failures
-  - pipeline step timings
-- Do not add unnecessary log noise.
+Manual GUI validation is required for behavior that cannot be covered by unit tests.
 
----
+## Model and GPU safety
 
-## Audio/output constraints
-- Final outputs must remain playable in common desktop players.
-- Be careful with sample rate, channel count, codec, and container compatibility.
-- When changing merge logic, preserve original audio track behavior unless the task says otherwise.
-- For TTS / alignment tasks, protect intelligibility first, then timing precision.
-- For mux / merge tasks, protect playability first.
+Model/runtime changes are high-risk.
 
----
+Inspect:
 
-## Tests policy
-- Add or update tests for behavior changes when feasible.
-- Prefer focused tests around:
-  - config parsing
-  - CLI argument behavior
-  - utility functions
-  - file naming / output planning
-  - command construction
-- If end-to-end validation is too heavy, add the best lightweight coverage possible.
-- If tests cannot be run, say so explicitly.
+- model catalog and resolver;
+- installer/status logic;
+- device and compute type;
+- torch/CUDA compatibility;
+- model initialization ownership;
+- reuse versus repeated loading;
+- VRAM release;
+- batch size;
+- precision;
+- CPU fallback;
+- cache locations;
+- failure recovery;
+- multi-file execution behavior.
 
----
+Do not upgrade torch, torchaudio, torchvision, WhisperX, pyannote, Coqui TTS, CUDA,
+or model identifiers casually.
 
-## Documentation policy
-Update docs when changing:
-- installation/setup
-- required tools
-- model handling
-- config schema
-- CLI flags
-- GUI behavior
-- pipeline step behavior
-- output naming or output structure
+The repository pins:
 
-At minimum check:
-- `README.md`
-- example configs
-- `docs/`
-- changelog / release notes if present
+```text
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+pyannote.audio==3.4.0
+```
 
----
+Dependency changes require a compatibility investigation and focused runtime validation.
 
-## Safety and constraints
-- Never hardcode secrets, tokens, or local absolute paths.
-- Never invent successful command results if commands were not run.
-- Never delete user media, models, or outputs unless explicitly requested.
-- Avoid destructive cleanup of caches or model folders unless explicitly requested.
-- If a task is risky, state the risk clearly.
+Do not claim performance improvement without comparable measurements.
 
----
+## Pipeline and artifact safety
+
+For step changes, inspect:
+
+- input contract;
+- output artifact contract;
+- skip/rebuild behavior;
+- artifact existence checks;
+- target-language naming;
+- partial failure behavior;
+- cleanup/keep-temp behavior;
+- batch/multi-file behavior;
+- progress reporting;
+- logging/timing;
+- downstream consumers.
+
+Avoid overwriting original media until final output is validated.
+
+For update-existing-file behavior, use an atomic or rollback-safe strategy.
+
+## Audio and media safety
+
+For FFmpeg, alignment, TTS, and mux changes, verify:
+
+- sample rate and channel assumptions;
+- segment start/end/duration;
+- silence and gap insertion;
+- tempo/stretch behavior;
+- clipping;
+- loudness normalization;
+- ducking threshold/attack/release;
+- stream mapping;
+- language tags and titles;
+- container compatibility;
+- original track preservation;
+- temporary output and final replace sequence;
+- FFmpeg command quoting on Windows.
+
+Do not infer media correctness from a successful process exit alone. Inspect command,
+metadata, durations, and representative output.
+
+## Testing and benchmark discipline
+
+Run narrow tests first.
+
+Preferred general validation:
+
+```powershell
+python -m pytest
+python -m dubpipeline.cli --help
+python -m dubpipeline.cli run <pipeline.yaml> --plan
+python -m dubpipeline.cli speak --text "–¢–µ—Å—Ç" --out-audio <path> --plan
+```
+
+Use the repository's actual test paths and supported command syntax.
+
+For performance work, use the established policy when applicable:
+
+```text
+1 warmup run + 5 measured runs
+report median
+record commit, branch, device, compute type, batch size, model, and input
+```
+
+Do not compare runs with different models, inputs, hardware modes, or cache state without
+calling out the difference.
+
+GPU-heavy integration tests may be unavailable in CI. State what ran and what remains
+manual.
+
+## Dependency and environment safety
+
+- Preserve `requirements.txt` compatibility unless the ticket explicitly changes it.
+- Do not commit Hugging Face tokens, pyannote tokens, credentials, private paths, or
+  environment files.
+- Do not commit model weights or downloaded packages.
+- Verify FFmpeg/FFplay availability before media tests.
+- Verify CUDA and torch versions before GPU claims.
+- Keep environment-specific instructions out of production defaults.
+
+## Change safety
+
+- Do not modify production code during investigation-only tasks.
+- Do not reset, clean, stash, revert, or overwrite unrelated user changes.
+- Keep scope aligned with the ticket.
+- Avoid unrelated refactoring.
+- Preserve backward compatibility unless removal is explicit.
+- Distinguish direct impact, adjacent impact, generated-artifact impact, model/runtime
+  impact, GUI-only impact, test-only impact, and graph-proximity noise.
+
+## Documentation and task handoff
+
+Update README/config examples when public CLI, GUI, language, model, output, or setup
+behavior changes.
+
+After each YouTrack task, preserve handoff context:
+
+- what was done;
+- files changed;
+- decisions taken;
+- what remains;
+- risks/limitations;
+- next step.
 
 ## Definition of done
-A task is done only when:
-- the requested change is implemented
-- touched files are internally consistent
-- minimal necessary validation was performed
-- relevant docs/config examples were updated if needed
-- risks, limitations, or manual follow-up were stated clearly
 
----
+A non-trivial ticket is not complete until:
 
-## Final response format
-When finishing a task, respond with:
-1. Summary
-2. Files changed
-3. Validation performed
-4. Risks / limitations
-5. Manual steps, if any
-
-Be specific. Do not claim tests passed unless they were actually run.
-
----
-
-## Subdirectory overrides
-More specific `AGENTS.md` files in subfolders may define stricter local rules.
-When working in a subdirectory, prefer the nearest applicable instructions.
-
+- the applicable pre-ticket workflow was executed;
+- graph findings were validated against source;
+- CLI/GUI/config/model/media risks were assessed;
+- the smallest coherent implementation was completed;
+- tests were added or updated;
+- CRG was updated after changes;
+- post-change impact was inspected;
+- required tests, plan runs, and manual checks were executed or reported unavailable;
+- benchmark claims include reproducible evidence;
+- documentation/handoff obligations were evaluated;
+- remaining risks were documented;
+- an implementation report was produced.
