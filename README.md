@@ -192,6 +192,29 @@ python -m dubpipeline.cli speak --text-file chapter.txt --out-audio chapter.wav 
 - Translation model availability is resolved per language pair, so a model may be available for one pair and unavailable for another.
 - Legacy YAML with `en` can still be loaded for backward compatibility, but new GUI/CLI selection is intentionally limited to `de/fr/es/ru`.
 
+## Translation Providers
+
+Translation runtime code is routed through provider classes in `dubpipeline.translation.providers`.
+The default provider is `auto`, which preserves the existing model-based behavior:
+HF sequence-to-sequence models use the HF provider, and Argos models use the Argos provider.
+
+YAML can select a provider through:
+
+```yaml
+translation:
+  provider: auto
+```
+
+The CLI exposes the same setting:
+
+```bash
+python -m dubpipeline.cli run video.pipeline.yaml --translation-provider argos
+```
+
+Supported public values are `auto` and `argos`. Future providers should add a provider class,
+register it in the provider factory, add tests that do not download models, and only then expose
+the value in config/CLI.
+
 ## Target-Aware Outputs
 
 - Translated segments are written to `*.segments.{target_lang}.json`.

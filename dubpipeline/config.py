@@ -19,6 +19,7 @@ from dubpipeline.models.catalog import (
     resolve_model_spec,
     resolve_default_model_id,
 )
+from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS
 from dubpipeline.utils.logging import info, warn
 
 
@@ -293,6 +294,7 @@ class TranslateConfig:
 
 @dataclass
 class TranslationConfig:
+    provider: str = ""
     backend: str = ""
     model_id: str = ""
     model_ref: str = ""
@@ -566,6 +568,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TRANSLATION_BACKEND": "translation.backend",
         "DUBPIPELINE_TRANSLATION_MODEL_ID": "translation.model_id",
         "DUBPIPELINE_TRANSLATION_MODEL_REF": "translation.model_ref",
+        "DUBPIPELINE_TRANSLATION_PROVIDER": "translation.provider",
         # Output
         "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
         "DUBPIPELINE_OUTPUT_UPDATE_EXISTING_FILE": "output.update_existing_file",
@@ -811,6 +814,7 @@ def load_pipeline_config_ex(
     translate = TranslateConfig(**(merged.get("translate") or {}))
     translation_raw = merged.get("translation") or {}
     translation = TranslationConfig(**translation_raw)
+    translation.provider = str(translation.provider or "").strip().lower()
 
     translate_defaults = TranslateConfig()
     legacy_model_id = None
@@ -822,8 +826,12 @@ def load_pipeline_config_ex(
             translate.backend,
             translate.hf_model,
         )
+    if translation.provider == "argos":
+        translation.model_id = "argos"
     if not translation.model_id:
         translation.model_id = legacy_model_id or resolve_default_model_id(languages.src, languages.tgt)
+    if translation.provider and translation.provider not in PUBLIC_TRANSLATION_PROVIDERS:
+        warn(f"[config] Unknown translation.provider='{translation.provider}'. Runtime will report a provider error.")
 
     try:
         model_spec = resolve_model_spec(translation.model_id, languages.src, languages.tgt)
@@ -993,6 +1001,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
         model_spec = resolve_model_spec(resolve_default_model_id(src_lang, tgt_lang), src_lang, tgt_lang)
 
     cfg.setdefault("translation", {})
+    cfg["translation"]["provider"] = (cfg["translation"].get("provider") or "")
     cfg["translation"]["model_id"] = model_spec.id
     cfg["translation"]["backend"] = model_spec.backend
     cfg["translation"]["model_ref"] = model_spec.model_ref

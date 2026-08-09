@@ -12,6 +12,7 @@ from typing import Callable
 from dubpipeline.consts import Const
 from dubpipeline.steps.step_text_input import load_text, normalize_text, save_segments_json, split_to_segments
 from dubpipeline.steps.step_tts_core import synthesize_segments_to_wavs
+from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS
 from dubpipeline.utils.concat_wavs import concat_wavs
 from dubpipeline.utils.logging import info, init_logger, warn
 from dubpipeline.utils.output_move import OutputMover
@@ -74,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="LANG",
         help=f"Target language. Supported values: {supported_langs_text}.",
+    )
+    run_parser.add_argument(
+        "--translation-provider",
+        default=None,
+        choices=PUBLIC_TRANSLATION_PROVIDERS,
+        metavar="PROVIDER",
+        help=f"Translation provider. Supported values: {', '.join(PUBLIC_TRANSLATION_PROVIDERS)}.",
     )
     run_parser.add_argument("--steps", default=None, metavar="LIST", help="Pipeline steps to enable or patch.")
     run_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
@@ -161,6 +169,8 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         if tgt_lang not in SUPPORTED_TRANSLATION_LANGUAGES:
             parser.error(f"--lang-dst must be one of: {supported_langs_text}")
         cli_set.append(f"languages.tgt={tgt_lang}")
+    if args.translation_provider is not None:
+        cli_set.append(f"translation.provider={args.translation_provider}")
     if args.usegpu:
         cli_set.append("usegpu=true")
     if args.cpu:

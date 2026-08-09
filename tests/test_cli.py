@@ -39,6 +39,7 @@ class CliTests(unittest.TestCase):
             "--out",
             "--lang-src",
             "--lang-dst",
+            "--translation-provider",
             "--steps",
             "--usegpu",
             "--cpu",
@@ -106,6 +107,20 @@ class CliTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 _build_cli_set(args, parser)
         self.assertIn("--lang-src must be one of", stderr.getvalue())
+
+    def test_translation_provider_argos_adds_cli_override(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "argos"])
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("translation.provider=argos", cli_set)
+
+    def test_translation_provider_rejects_unknown_value(self):
+        parser = build_parser()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "xyz"])
+        self.assertIn("invalid choice", stderr.getvalue())
 
     def test_same_language_pair_is_rejected_when_translate_enabled(self):
         parser = build_parser()

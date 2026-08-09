@@ -10,6 +10,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from dubpipeline.config import PipelineConfig
+from dubpipeline.config import load_pipeline_config_ex
 from dubpipeline.models.catalog import (
     NOT_SUPPORTED_REASON,
     ModelStatus,
@@ -19,6 +20,13 @@ from dubpipeline.models.catalog import (
     list_model_specs,
 )
 from dubpipeline.translation.service import ActiveModel, TranslationModelUnavailableError, TranslatorService
+from dubpipeline.translation.providers import (
+    ArgosTranslationProvider,
+    HfSeq2SeqTranslationProvider,
+    TranslationProviderContext,
+    create_translation_provider,
+    resolve_translation_provider_id,
+)
 from dubpipeline.steps import step_translate
 
 
@@ -210,6 +218,75 @@ class TranslationPairStatusTests(unittest.TestCase):
         self.assertIn("en->de", en_de_scope)
         self.assertNotEqual(en_ru_scope, en_de_scope)
 
+    def test_provider_factory_resolves_auto_from_backend(self):
+        context = TranslationProviderContext(
+            active_model=ActiveModel(
+                model_id="opus_mt",
+                label="OPUS-MT (Helsinki-NLP)",
+                backend="opus_mt",
+                model_ref="Helsinki-NLP/opus-mt-en-ru",
+            ),
+            src_lang="en",
+            tgt_lang="ru",
+            usegpu=False,
+            batch_size=1,
+            max_new_tokens=32,
+        )
+
+        provider = create_translation_provider("auto", context)
+
+        self.assertIsInstance(provider, HfSeq2SeqTranslationProvider)
+
+    def test_provider_factory_creates_argos_provider(self):
+        context = TranslationProviderContext(
+            active_model=ActiveModel(
+                model_id="argos",
+                label="Argos Translate",
+                backend="argos",
+                model_ref="argos-en-ru",
+            ),
+            src_lang="en",
+            tgt_lang="ru",
+            usegpu=False,
+            batch_size=1,
+            max_new_tokens=32,
+        )
+
+        provider = create_translation_provider("argos", context)
+
+        self.assertIsInstance(provider, ArgosTranslationProvider)
+
+    def test_provider_factory_rejects_unknown_provider(self):
+        with self.assertRaisesRegex(TranslationModelUnavailableError, "translation provider 'xyz' is not supported"):
+            resolve_translation_provider_id("xyz", "argos")
+
+    def test_translator_service_explicit_argos_provider_selects_argos_model(self):
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "en"
+        cfg.languages.tgt = "ru"
+        cfg.translation.provider = "argos"
+        cfg.translation.model_id = "opus_mt"
+
+        with (
+            patch(
+                "dubpipeline.translation.service.get_model_status",
+                return_value=ModelStatus(available=True, enabled=True, reason=""),
+            ),
+            patch("dubpipeline.translation.service.get_model_install_dir", return_value=None),
+        ):
+            service = TranslatorService(cfg)
+
+        self.assertEqual(service.provider_id, "argos")
+        self.assertEqual(service.model_id, "argos")
+
+    def test_translator_service_rejects_invalid_provider(self):
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.translation.provider = "xyz"
+        cfg.translation.model_id = "argos"
+
+        with self.assertRaisesRegex(TranslationModelUnavailableError, "translation provider 'xyz' is not supported"):
+            TranslatorService(cfg)
+
 
 class TranslationStepIntegrationTests(unittest.TestCase):
     @staticmethod
@@ -294,6 +371,35 @@ class TranslationStepIntegrationTests(unittest.TestCase):
             translated = json.load(f)
         self.assertEqual([item["text_tgt"] for item in translated], ["RU:Hello", "RU:World"])
         self.assertEqual([item["text_ru"] for item in translated], ["RU:Hello", "RU:World"])
+
+    def test_config_load_accepts_explicit_argos_provider(self):
+        root = self._case_dir("translation_provider_config")
+        pipeline_file = root / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: ru
+paths:
+  workdir: .
+  out_dir: out
+  input_video: sample.mp4
+translation:
+  provider: argos
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "dubpipeline.config.get_model_status",
+            return_value=ModelStatus(available=True, enabled=True, reason=""),
+        ):
+            cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertEqual(cfg.translation.provider, "argos")
+        self.assertEqual(cfg.translation.model_id, "argos")
+        self.assertEqual(cfg.translation.backend, "argos")
 
 
 if __name__ == "__main__":
