@@ -123,3 +123,29 @@ QC-отчёт (JSON) на каждый шаг: длительности, кол-
 Кэш/чекпойнты + device_map по шагам.
 
 Если покажете ваш текущий pipeline.yaml (или кусок про шаги/параметры устройств/выходные файлы) — я сразу предложу конкретную структуру device_map, “stamps”, и формат QC-отчёта под ваш код.
+
+
+
+
+System.IO.FileNotFoundException
+  HResult=0x80070002
+  Message=Could not load file or assembly 'DevExpress.Data.v25.2, Version=25.2.3.0, Culture=neutral, PublicKeyToken=b88d1754d700e49a'. The system cannot find the file specified.
+  Source=System.Private.CoreLib
+  StackTrace:
+   at System.ModuleHandle.ResolveType(QCallModule module, Int32 typeToken, IntPtr* typeInstArgs, Int32 typeInstCount, IntPtr* methodInstArgs, Int32 methodInstCount, ObjectHandleOnStack type)
+   at System.ModuleHandle.ResolveTypeHandle(Int32 typeToken, RuntimeTypeHandle[] typeInstantiationContext, RuntimeTypeHandle[] methodInstantiationContext)
+   at System.Reflection.RuntimeModule.ResolveType(Int32 metadataToken, Type[] genericTypeArguments, Type[] genericMethodArguments)
+   at System.Reflection.CustomAttribute.FilterCustomAttributeRecord(MetadataToken caCtorToken, MetadataImport& scope, RuntimeModule decoratedModule, MetadataToken decoratedToken, RuntimeType attributeFilterType, Boolean mustBeInheritable, ListBuilder`1& derivedAttributes, RuntimeType& attributeType, IRuntimeMethodInfo& ctorWithParameters, Boolean& isVarArg)
+   at System.Reflection.CustomAttribute.AddCustomAttributes(ListBuilder`1& attributes, RuntimeModule decoratedModule, Int32 decoratedMetadataToken, RuntimeType attributeFilterType, Boolean mustBeInheritable, ListBuilder`1 derivedAttributes)
+   at System.Reflection.CustomAttribute.GetCustomAttributes(RuntimeModule decoratedModule, Int32 decoratedMetadataToken, Int32 pcaCount, RuntimeType attributeFilterType)
+   at System.Attribute.GetCustomAttributes(Assembly element, Type attributeType, Boolean inherit)
+   at System.Attribute.GetCustomAttribute(Assembly element, Type attributeType, Boolean inherit)
+   at System.Reflection.CustomAttributeExtensions.GetCustomAttribute[T](Assembly element)
+   at Microsoft.AspNetCore.Mvc.ApplicationParts.ApplicationPartFactory.GetApplicationPartFactory(Assembly assembly)
+   at Microsoft.AspNetCore.Mvc.ApplicationParts.ApplicationPartManager.PopulateDefaultParts(String entryAssemblyName)
+   at Microsoft.Extensions.DependencyInjection.MvcCoreServiceCollectionExtensions.GetApplicationPartManager(IServiceCollection services, IWebHostEnvironment environment)
+   at Microsoft.Extensions.DependencyInjection.MvcCoreServiceCollectionExtensions.AddMvcCore(IServiceCollection services)
+   at Microsoft.Extensions.DependencyInjection.MvcServiceCollectionExtensions.AddControllersCore(IServiceCollection services)
+   at Microsoft.Extensions.DependencyInjection.MvcServiceCollectionExtensions.AddControllersWithViewsCore(IServiceCollection services)
+   at Microsoft.Extensions.DependencyInjection.MvcServiceCollectionExtensions.AddControllersWithViews(IServiceCollection services)
+   at Program.<<Main>$>d__0.MoveNext() in J:\Projects\c#\(!!!VARUS)\VarPrice.Web\Program.cs:line 28

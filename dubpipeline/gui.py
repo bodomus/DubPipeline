@@ -1,16 +1,16 @@
-import threading
+import os
+import re
+import shutil
 import subprocess
 import sys
-import os
 import tempfile
+import threading
+import time
 from multiprocessing import Process, Queue
 from pathlib import Path
 
 import FreeSimpleGUI as sg
 import yaml
-import re
-import time
-import shutil
 
 from dubpipeline.cli import synthesize_text_to_wav
 from dubpipeline.config import (
@@ -22,6 +22,17 @@ from dubpipeline.config import (
     pipeline_path,
     save_pipeline_yaml,
     validate_translation_language_pair,
+)
+from dubpipeline.external_subtitles import (
+    find_external_subtitle_for_video,
+    missing_subtitles_error,
+)
+from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
+from dubpipeline.input_mode import (
+    build_audio_output_path,
+    resolve_saved_input_state,
+    validate_input_path,
+    validate_text_file_path,
 )
 from dubpipeline.models.catalog import (
     NOT_SUPPORTED_REASON,
@@ -36,14 +47,10 @@ from dubpipeline.models.installer import (
     ModelInstallStatus,
     get_model_installer,
 )
-from dubpipeline.translation.service import model_not_installed_message
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
-
+from dubpipeline.translation.service import model_not_installed_message
 from dubpipeline.utils.build_info import get_build_info
-from dubpipeline.utils.logging import info, error
-from dubpipeline.input_discovery import enumerate_input_files, source_mode_disabled_map
-from dubpipeline.input_mode import build_audio_output_path, resolve_saved_input_state, validate_input_path, validate_text_file_path
-from dubpipeline.external_subtitles import find_external_subtitle_for_video, missing_subtitles_error
+from dubpipeline.utils.logging import error
 
 
 def _preview_worker_target(
@@ -94,6 +101,7 @@ def _audio_play_worker_target(
     except Exception as ex:
         q.put({"ok": False, "error": str(ex)})
 
+
 STEP_LABELS = {
     "extract_audio": "Extract audio",
     "asr_whisperx": "ASR (WhisperX)",
@@ -138,15 +146,24 @@ AUDIO_MODE_TOOLTIP = (
 def _mode_to_display(value: str) -> str:
     return MODE_DISPLAY_BY_VALUE.get(normalize_audio_update_mode(value), "Add")
 
+
 def show_app_constants():
-    print(f'### DUBPIPELINE_TTS_MAX_RU_CHARS: {os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS")}')
-    print(f'###DUBPIPELINE_TTS_TRY_SINGLE_CALL: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL")}')
-    print(f'### DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS")}')
+    print(
+        f'### DUBPIPELINE_TTS_MAX_RU_CHARS: {os.getenv("DUBPIPELINE_TTS_MAX_RU_CHARS")}'
+    )
+    print(
+        f'### DUBPIPELINE_TTS_TRY_SINGLE_CALL: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL")}'
+    )
+    print(
+        f'### DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS: {os.getenv("DUBPIPELINE_TTS_TRY_SINGLE_CALL_MAX_CHARS")}'
+    )
     print(f'### DUBPIPELINE_MIN_SEG_DUR: {os.getenv("DUBPIPELINE_MIN_SEG_DUR")}')
     print(f'### DUBPIPELINE_MIN_SEG_CHARS: {os.getenv("DUBPIPELINE_MIN_SEG_CHARS")}')
     print(f'### DUBPIPELINE_MERGE_MAX_GAP: {os.getenv("DUBPIPELINE_MERGE_MAX_GAP")}')
     print(f'### DUBPIPELINE_MAX_SEG_DUR: {os.getenv("DUBPIPELINE_MAX_SEG_DUR")}')
-    print(f'### DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER: {os.getenv("DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER")}')
+    print(
+        f'### DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER: {os.getenv("DUBPIPELINE_MERGE_ALLOW_CROSS_SPEAKER")}'
+    )
 
 
 USE_SUBPROCESS = True
@@ -156,18 +173,19 @@ with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
     BASE_CFG = yaml.safe_load(f)
 
 LOG_LINE_RE = re.compile(
-    r"^\[(?P<level>\w+\s*)]\s*"                # [LEVEL]
+    r"^\[(?P<level>\w+\s*)]\s*"  # [LEVEL]
     r"(?:(?P<time>\d{2}:\d{2}:\d{2})\s*\|\s*)?"  # необязательное "HH:MM:SS | "
-    r"(?P<msg>.*)$"                          # остальное — сообщение
+    r"(?P<msg>.*)$"  # остальное — сообщение
 )
 
 LEVEL_COLORS = {
-    "DEBUG": "darkblue",          # по умолчанию
-    "INFO":  "green",
-    "STEP":  "blue",
-    "WARN":  "orange",
+    "DEBUG": "darkblue",  # по умолчанию
+    "INFO": "green",
+    "STEP": "blue",
+    "WARN": "orange",
     "ERROR": "red",
 }
+
 
 def print_parsed_log(window, line: str) -> None:
     ml = window["-LOGBOX-"]
@@ -274,7 +292,9 @@ class PreviewController:
             "error",
             audio_path,
         ]
-        self._player = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._player = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
 
         def _wait_playback() -> None:
             if self._player is not None:
@@ -353,7 +373,9 @@ class AudioPlaybackController:
             "error",
             audio_path,
         ]
-        self._player = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._player = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
 
         def _wait_playback() -> None:
             if self._player is not None:
@@ -408,7 +430,9 @@ def run_pipeline_sequence(run_items, window):
 
         for idx, (label, args_list) in enumerate(run_items, start=1):
             # <<< ДОБАВИТЬ: сообщаем GUI какой файл сейчас пойдёт
-            window.write_event_value("-FILE-", {"idx": idx, "total": total, "name": label})
+            window.write_event_value(
+                "-FILE-", {"idx": idx, "total": total, "name": label}
+            )
 
             _emit_info(window, f"=== ({idx}/{total}) {label} ===")
 
@@ -474,7 +498,9 @@ def _language_choices(current_lang: str) -> list[str]:
     return choices
 
 
-def _language_pair_summary(src_lang: str, tgt_lang: str, *, translate_enabled: bool) -> tuple[str, str]:
+def _language_pair_summary(
+    src_lang: str, tgt_lang: str, *, translate_enabled: bool
+) -> tuple[str, str]:
     validation_error = validate_translation_language_pair(
         src_lang,
         tgt_lang,
@@ -482,7 +508,10 @@ def _language_pair_summary(src_lang: str, tgt_lang: str, *, translate_enabled: b
         allow_legacy=True,
     )
     if validation_error:
-        return f"Language pair: {src_lang} -> {tgt_lang} ({validation_error})", "firebrick"
+        return (
+            f"Language pair: {src_lang} -> {tgt_lang} ({validation_error})",
+            "firebrick",
+        )
 
     legacy_codes = [
         code
@@ -502,8 +531,12 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
     steps = normalize_steps(current_steps)
     layout = [[sg.Text("Select generation steps:")]]
     for key in STEP_LABELS:
-        layout.append([sg.Checkbox(STEP_LABELS[key], key=f"-STEP-{key}-", default=steps[key])])
-    layout.append([sg.Button("Save", key="-SAVE-"), sg.Button("Cancel", key="-CANCEL-")])
+        layout.append(
+            [sg.Checkbox(STEP_LABELS[key], key=f"-STEP-{key}-", default=steps[key])]
+        )
+    layout.append(
+        [sg.Button("Save", key="-SAVE-"), sg.Button("Cancel", key="-CANCEL-")]
+    )
 
     window = sg.Window(
         "Generation Steps",
@@ -528,13 +561,17 @@ def show_steps_modal(parent, current_steps: dict) -> dict:
     return result
 
 
-def _translation_summary(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> tuple[str, str]:
+def _translation_summary(
+    model_id: str, src_lang: str | None = None, tgt_lang: str | None = None
+) -> tuple[str, str]:
     if src_lang is None or tgt_lang is None:
         src_lang, tgt_lang = _current_base_languages()
     try:
         spec = resolve_model_spec(model_id, src_lang, tgt_lang)
         status = get_model_status(model_id, src_lang, tgt_lang)
-        install_status = get_model_installer().get_status(model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        install_status = get_model_installer().get_status(
+            model_id, src_lang=src_lang, tgt_lang=tgt_lang
+        )
     except Exception:
         return "Machine Translation: unknown model", "firebrick"
 
@@ -543,7 +580,9 @@ def _translation_summary(model_id: str, src_lang: str | None = None, tgt_lang: s
     if is_unsupported_pair_reason(status.reason):
         return f"Machine Translation: {spec.label} ({status.reason})", "gray45"
     if install_status.status == "failed":
-        reason = (install_status.error or install_status.message or "install failed").strip()
+        reason = (
+            install_status.error or install_status.message or "install failed"
+        ).strip()
         if len(reason) > 64:
             reason = f"{reason[:61]}..."
         return f"Machine Translation: {spec.label} (failed: {reason})", "firebrick"
@@ -627,7 +666,9 @@ def ensure_translation_model_ready_for_start(
     persist_languages(src_lang, tgt_lang)
     persist_translation_model(selected_model_id, src_lang=src_lang, tgt_lang=tgt_lang)
     window["-TRANSLATION_MODEL_ID-"].update(selected_model_id)
-    summary_text, summary_color = _translation_summary(selected_model_id, src_lang, tgt_lang)
+    summary_text, summary_color = _translation_summary(
+        selected_model_id, src_lang, tgt_lang
+    )
     window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
     _emit_info(
         window,
@@ -648,7 +689,10 @@ def sync_translation_start_values(
     tgt = normalize_language_code(tgt_lang, default="ru")
     selected_model_id = (model_id or "").strip()
     if not selected_model_id:
-        return False, "Translation model is not configured. Open Models and choose an installed model."
+        return (
+            False,
+            "Translation model is not configured. Open Models and choose an installed model.",
+        )
 
     spec = resolve_model_spec(selected_model_id, src, tgt)
     status = get_model_status(selected_model_id, src, tgt)
@@ -668,7 +712,9 @@ def persist_languages(src_lang: str, tgt_lang: str) -> None:
     _persist_base_cfg()
 
 
-def persist_translation_model(model_id: str, src_lang: str | None = None, tgt_lang: str | None = None) -> None:
+def persist_translation_model(
+    model_id: str, src_lang: str | None = None, tgt_lang: str | None = None
+) -> None:
     if src_lang is None or tgt_lang is None:
         src_lang, tgt_lang = _current_base_languages()
     spec = resolve_model_spec(model_id, src_lang, tgt_lang)
@@ -685,7 +731,9 @@ def persist_translation_model(model_id: str, src_lang: str | None = None, tgt_la
     _persist_base_cfg()
 
 
-def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang: str) -> str | None:
+def show_models_modal(
+    parent, current_model_id: str, *, src_lang: str, tgt_lang: str
+) -> str | None:
     installer = get_model_installer()
     choices = build_model_choices(src_lang, tgt_lang)
     displays = [item.display for item in choices]
@@ -800,7 +848,9 @@ def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang:
             return
 
         spec = resolve_model_spec(choice.model_id, src_lang, tgt_lang)
-        install_status = installer.get_status(choice.model_id, src_lang=src_lang, tgt_lang=tgt_lang)
+        install_status = installer.get_status(
+            choice.model_id, src_lang=src_lang, tgt_lang=tgt_lang
+        )
 
         if not spec.supported:
             window["-MODELS_STATUS-"].update(
@@ -830,7 +880,9 @@ def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang:
         if install_status.status == "downloading":
             msg = install_status.message or "Downloading..."
             window["-MODELS_STATUS-"].update(msg, text_color="blue")
-            window["-MODELS_PROGRESS-"].update_bar(int(max(0.0, min(1.0, install_status.progress)) * 100))
+            window["-MODELS_PROGRESS-"].update_bar(
+                int(max(0.0, min(1.0, install_status.progress)) * 100)
+            )
             window["-MODELS_INSTALL-"].update(disabled=True)
             window["-MODELS_CANCEL_INSTALL-"].update(disabled=False)
             window["-MODELS_APPLY-"].update(disabled=True)
@@ -838,7 +890,9 @@ def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang:
             return
 
         if install_status.status == "failed":
-            error_text = (install_status.error or install_status.message or "install failed").strip()
+            error_text = (
+                install_status.error or install_status.message or "install failed"
+            ).strip()
             if len(error_text) > 80:
                 error_text = f"{error_text[:77]}..."
             window["-MODELS_STATUS-"].update(
@@ -853,7 +907,9 @@ def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang:
             return
 
         if status.enabled and install_status.status == "installed":
-            window["-MODELS_STATUS-"].update("Model is installed and ready.", text_color="darkgreen")
+            window["-MODELS_STATUS-"].update(
+                "Model is installed and ready.", text_color="darkgreen"
+            )
             window["-MODELS_PROGRESS-"].update_bar(100)
             window["-MODELS_INSTALL-"].update(disabled=True)
             window["-MODELS_CANCEL_INSTALL-"].update(disabled=True)
@@ -957,14 +1013,20 @@ def show_models_modal(parent, current_model_id: str, *, src_lang: str, tgt_lang:
                     color = "blue"
                     if progress.status == "failed":
                         color = "firebrick"
-                    window["-MODELS_STATUS-"].update(progress.message or "", text_color=color)
+                    window["-MODELS_STATUS-"].update(
+                        progress.message or "", text_color=color
+                    )
                     if progress.status == "downloading":
                         window["-MODELS_INSTALL-"].update(disabled=True)
                         window["-MODELS_CANCEL_INSTALL-"].update(disabled=False)
                         window["-MODELS_APPLY-"].update(disabled=True)
         if event == "-MODELS_INSTALL_DONE-":
             install_result = values.get("-MODELS_INSTALL_DONE-")
-            if install_result is not None and getattr(install_result, "model_id", None) == active_download_model_id:
+            if (
+                install_result is not None
+                and getattr(install_result, "model_id", None)
+                == active_download_model_id
+            ):
                 active_download_model_id = None
             target_model_id = getattr(install_result, "model_id", None)
             _refresh_choices(target_model_id=target_model_id)
@@ -991,9 +1053,9 @@ def set_source_mode(window, is_dir: bool) -> None:
 def browse_input_path(*, is_dir_mode: bool, video_file_types):
     if is_dir_mode:
         return sg.popup_get_folder("Select folder with videos", no_window=True)
-    return sg.popup_get_file("Select video file", file_types=video_file_types, no_window=True)
-
-
+    return sg.popup_get_file(
+        "Select video file", file_types=video_file_types, no_window=True
+    )
 
 
 def browse_text_file():
@@ -1079,11 +1141,17 @@ def handle_file_event(window, values, base_title: str, progress_state: dict) -> 
     if total and idx:
         progress_state["done"] = max(0, int(idx) - 1)
         progress_state["total"] = int(total)
-        window["-STATUS-"].update(format_done_status(progress_state["done"], progress_state["total"]))
+        window["-STATUS-"].update(
+            format_done_status(progress_state["done"], progress_state["total"])
+        )
         window["-PROJECT-"].update(name)
         window["-INPUT_PATH-"].update(name)
     else:
-        window["-STATUS-"].update(format_done_status(progress_state.get("done", 0), progress_state.get("total", 0)))
+        window["-STATUS-"].update(
+            format_done_status(
+                progress_state.get("done", 0), progress_state.get("total", 0)
+            )
+        )
     try:
         if total and idx:
             window.TKroot.title(f"{base_title} — {idx}/{total}: {name}")
@@ -1091,6 +1159,7 @@ def handle_file_event(window, values, base_title: str, progress_state: dict) -> 
             window.TKroot.title(f"{base_title} — {name}")
     except Exception:
         pass
+
 
 def _prepare_folder_run(values, current_steps, video_exts, window):
     in_dir = values.get("-INPUT_PATH-", "").strip()
@@ -1101,11 +1170,15 @@ def _prepare_folder_run(values, current_steps, video_exts, window):
 
     in_dir_p = Path(in_dir)
     recursive = bool(values.get("-RECURSIVE-", False))
-    files = enumerate_input_files(in_dir_p, recursive=recursive, allowed_exts=video_exts)
+    files = enumerate_input_files(
+        in_dir_p, recursive=recursive, allowed_exts=video_exts
+    )
     _emit_info(window, f"Directory scan: recursive={recursive}")
     _emit_info(window, f"Found {len(files)} files")
     if not files:
-        sg.popup_error("No video files were found in the selected folder (*.mp4, *.mkv, *.mov, *.avi).")
+        sg.popup_error(
+            "No video files were found in the selected folder (*.mp4, *.mkv, *.mov, *.avi)."
+        )
         return None, 0
 
     if bool(values.get("-USE_EXISTING_SUBTITLES-", False)):
@@ -1181,7 +1254,9 @@ def _prepare_single_file_run(values, current_steps, window):
     return [(Path(input_path).name, args)], 1
 
 
-def _run_audio_synthesis(values, voice_id: str, out_audio: str, saved_wav: str, window) -> None:
+def _run_audio_synthesis(
+    values, voice_id: str, out_audio: str, saved_wav: str, window
+) -> None:
     text_file = Path(values.get("-TEXT_PATH-", "").strip()).expanduser().resolve()
     try:
         synthesize_text_to_wav(
@@ -1198,7 +1273,9 @@ def _run_audio_synthesis(values, voice_id: str, out_audio: str, saved_wav: str, 
             if saved_path != out_audio_path:
                 shutil.copy2(out_audio_path, saved_path)
             saved_file = str(saved_path)
-        window.write_event_value("-AUDIO_DONE-", {"ok": True, "file": out_audio, "saved_file": saved_file})
+        window.write_event_value(
+            "-AUDIO_DONE-", {"ok": True, "file": out_audio, "saved_file": saved_file}
+        )
     except Exception as ex:
         window.write_event_value("-AUDIO_DONE-", {"ok": False, "error": str(ex)})
 
@@ -1223,7 +1300,9 @@ def handle_audio_start_event(values, window, voice_id: str) -> bool:
     window["-AUDIO_ERROR-"].update("")
     window["-LOGBOX-"].update("")
     window["-STATUS-"].update("Status: running audio synthesis")
-    _emit_info(window, f"Audio synthesis started: {Path(text_path).name} -> {out_audio.name}")
+    _emit_info(
+        window, f"Audio synthesis started: {Path(text_path).name} -> {out_audio.name}"
+    )
     if saved_wav:
         _emit_info(window, f"Saved WAV will be: {Path(saved_wav).name}")
     threading.Thread(
@@ -1248,7 +1327,9 @@ def _validate_gui_language_pair(values, current_steps: dict) -> tuple[bool, str]
     return True, ""
 
 
-def handle_start_event(values, current_steps, video_exts, window, voice_id_by_display, progress_state: dict):
+def handle_start_event(
+    values, current_steps, video_exts, window, voice_id_by_display, progress_state: dict
+):
     active_tab = values.get("-MAIN_TABS-", TAB_VIDEO)
     if active_tab == TAB_AUDIO:
         selected_display = values.get("-VOICE-", "")
@@ -1261,14 +1342,18 @@ def handle_start_event(values, current_steps, video_exts, window, voice_id_by_di
         return 0
 
     if bool(values.get("-SRC_DIR-")):
-        run_items, run_count = _prepare_folder_run(values, current_steps, video_exts, window)
+        run_items, run_count = _prepare_folder_run(
+            values, current_steps, video_exts, window
+        )
         if not run_items:
             return 0
         window["-LOGBOX-"].update("")
         progress_state["done"] = 0
         progress_state["total"] = run_count
         window["-STATUS-"].update(format_done_status(0, run_count))
-        threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
+        threading.Thread(
+            target=run_pipeline_sequence, args=(run_items, window), daemon=True
+        ).start()
         return run_count
 
     run_items, run_count = _prepare_single_file_run(values, current_steps, window)
@@ -1278,7 +1363,9 @@ def handle_start_event(values, current_steps, video_exts, window, voice_id_by_di
     progress_state["done"] = 0
     progress_state["total"] = run_count
     window["-STATUS-"].update(format_done_status(0, run_count))
-    threading.Thread(target=run_pipeline_sequence, args=(run_items, window), daemon=True).start()
+    threading.Thread(
+        target=run_pipeline_sequence, args=(run_items, window), daemon=True
+    ).start()
     return run_count
 
 
@@ -1291,7 +1378,9 @@ def handle_log_event(window, values) -> None:
                 print_parsed_log(window, line)
 
 
-def handle_done_event(window, values, base_title: str, last_run_count: int, progress_state: dict) -> None:
+def handle_done_event(
+    window, values, base_title: str, last_run_count: int, progress_state: dict
+) -> None:
     exit_code = values["-DONE-"]
     try:
         window.TKroot.title(base_title)
@@ -1305,7 +1394,9 @@ def handle_done_event(window, values, base_title: str, last_run_count: int, prog
     else:
         done = progress_state.get("done", 0)
         total = progress_state.get("total", last_run_count)
-        window["-STATUS-"].update(f"{format_done_status(done, total)} | ERROR ({exit_code})")
+        window["-STATUS-"].update(
+            f"{format_done_status(done, total)} | ERROR ({exit_code})"
+        )
 
 
 def main():
@@ -1349,131 +1440,192 @@ def main():
     default_is_dir = default_input_mode == "dir"
     default_update_existing = bool(base_output_cfg.get("update_existing_file", False))
     default_use_existing_subtitles = bool(BASE_CFG.get("use_existing_subtitles", False))
-    default_mode_display = _mode_to_display(base_output_cfg.get("audio_update_mode", BASE_CFG.get("mode", "add")))
+    default_mode_display = _mode_to_display(
+        base_output_cfg.get("audio_update_mode", BASE_CFG.get("mode", "add"))
+    )
     default_out_dir = str(base_paths_cfg.get("out_dir") or "")
     video_exts = {".mp4", ".mkv", ".mov", ".avi"}
     video_file_types = (("Video files", "*.mp4;*.mkv;*.mov;*.avi"),)
 
     video_tab_layout = [
-        [sg.Text("Source:"),
-         sg.Radio("Single file", "SRCMODE", key="-SRC_FILE-", default=not default_is_dir, enable_events=True),
-         sg.Radio("Folder", "SRCMODE", key="-SRC_DIR-", default=default_is_dir, enable_events=True)],
-        [sg.Text("Input path:"),
-         sg.Input(key="-INPUT_PATH-", expand_x=True, enable_events=True),
-         sg.Button("Browse...", key="-BROWSE_INPUT-")],
-        [sg.Checkbox(
-            "Recursive (include subfolders)",
-            key="-RECURSIVE-",
-            default=False,
-            disabled=True,
-        )],
-        [sg.Checkbox(
-            "Update existing video file",
-            key="-UPDATE_EXISTING_FILE-",
-            default=default_update_existing,
-            enable_events=True,
-        )],
-        [sg.Text(
-            UPDATE_EXISTING_WARNING,
-            key="-UPDATE_WARNING-",
-            text_color="orange",
-            visible=default_update_existing,
-            expand_x=True,
-        )],
-        [sg.Text("Move to folder:"),
-         sg.Input(key="-MOVE_TO_DIR-", expand_x=True, enable_events=True),
-         sg.FolderBrowse("...", key="-BROWSE_MOVE_DIR-", target="-MOVE_TO_DIR-")],
-        [sg.Checkbox("Use existing subtitles file", key="-USE_EXISTING_SUBTITLES-", default=default_use_existing_subtitles)],
-        [sg.Text("Audio track update mode:"),
-         sg.Combo(
-             values=audio_mode_labels,
-             key="-MODES-",
-             readonly=True,
-             enable_events=True,
-             default_value=default_mode_display,
-             tooltip=AUDIO_MODE_TOOLTIP,
-             size=(40, 1),
-         )],
+        [
+            sg.Text("Source:"),
+            sg.Radio(
+                "Single file",
+                "SRCMODE",
+                key="-SRC_FILE-",
+                default=not default_is_dir,
+                enable_events=True,
+            ),
+            sg.Radio(
+                "Folder",
+                "SRCMODE",
+                key="-SRC_DIR-",
+                default=default_is_dir,
+                enable_events=True,
+            ),
+        ],
+        [
+            sg.Text("Input path:"),
+            sg.Input(key="-INPUT_PATH-", expand_x=True, enable_events=True),
+            sg.Button("Browse...", key="-BROWSE_INPUT-"),
+        ],
+        [
+            sg.Checkbox(
+                "Recursive (include subfolders)",
+                key="-RECURSIVE-",
+                default=False,
+                disabled=True,
+            )
+        ],
+        [
+            sg.Checkbox(
+                "Update existing video file",
+                key="-UPDATE_EXISTING_FILE-",
+                default=default_update_existing,
+                enable_events=True,
+            )
+        ],
+        [
+            sg.Text(
+                UPDATE_EXISTING_WARNING,
+                key="-UPDATE_WARNING-",
+                text_color="orange",
+                visible=default_update_existing,
+                expand_x=True,
+            )
+        ],
+        [
+            sg.Text("Move to folder:"),
+            sg.Input(key="-MOVE_TO_DIR-", expand_x=True, enable_events=True),
+            sg.FolderBrowse("...", key="-BROWSE_MOVE_DIR-", target="-MOVE_TO_DIR-"),
+        ],
+        [
+            sg.Checkbox(
+                "Use existing subtitles file",
+                key="-USE_EXISTING_SUBTITLES-",
+                default=default_use_existing_subtitles,
+            )
+        ],
+        [
+            sg.Text("Audio track update mode:"),
+            sg.Combo(
+                values=audio_mode_labels,
+                key="-MODES-",
+                readonly=True,
+                enable_events=True,
+                default_value=default_mode_display,
+                tooltip=AUDIO_MODE_TOOLTIP,
+                size=(40, 1),
+            ),
+        ],
     ]
 
     audio_tab_layout = [
-        [sg.Text("Text file:"),
-         sg.Input(key="-TEXT_PATH-", expand_x=True, enable_events=True),
-         sg.Button("Browse...", key="-BROWSE_TEXT-")],
+        [
+            sg.Text("Text file:"),
+            sg.Input(key="-TEXT_PATH-", expand_x=True, enable_events=True),
+            sg.Button("Browse...", key="-BROWSE_TEXT-"),
+        ],
         [sg.Checkbox("Save TTS to WAV file", key="-SAVE_AUDIO_WAV-", default=False)],
-        [sg.Button("> Play", key="-PLAY_AUDIO-", disabled=(len(voices) == 0)),
-         sg.Text("", key="-AUDIO_ERROR-", text_color="red", size=(50, 1), expand_x=True)],
+        [
+            sg.Button("> Play", key="-PLAY_AUDIO-", disabled=(len(voices) == 0)),
+            sg.Text(
+                "", key="-AUDIO_ERROR-", text_color="red", size=(50, 1), expand_x=True
+            ),
+        ],
     ]
 
     layout = [
-        [sg.Text("Project name:"),
-         sg.Input(key="-PROJECT-", expand_x=True)],
-        [sg.Text("Language pair:"),
-         sg.Combo(
-             values=src_language_choices,
-             key="-LANG_SRC-",
-             readonly=True,
-             enable_events=True,
-             default_value=current_src_lang,
-             size=(8, 1),
-         ),
-         sg.Text("->"),
-         sg.Combo(
-             values=tgt_language_choices,
-             key="-LANG_DST-",
-             readonly=True,
-             enable_events=True,
-             default_value=current_tgt_lang,
-             size=(8, 1),
-         ),
-         sg.Text("", key="-LANG_SUMMARY-", expand_x=True)],
-        [sg.TabGroup(
-            [[
-                sg.Tab("Video", video_tab_layout, key=TAB_VIDEO),
-                sg.Tab("Audio", audio_tab_layout, key=TAB_AUDIO),
-            ]],
-            key="-MAIN_TABS-",
-            enable_events=True,
-            expand_x=True,
-        )],
-        [sg.Text("TTS voice:"),
-         sg.Combo(
-             values=voices,
-             key="-VOICE-",
-             readonly=True,
-             enable_events=True,
-             default_value=(current_voice if current_voice in voices else (voices[0] if voices else "")),
-             disabled=(len(voices) == 0),
-             size=(40, 1),
-         ),
-         sg.Button("> Preview", key="-PREVIEW-", disabled=(len(voices) == 0)),
-         sg.Text("", key="-VOICE_ERROR-", text_color="red", size=(40, 1))],
-        [sg.Text("Output folder:"),
-         sg.Input(key="-OUT-", expand_x=True),
-         sg.FolderBrowse("...", key="-BROWSE_OUT-")],
+        [sg.Text("Project name:"), sg.Input(key="-PROJECT-", expand_x=True)],
+        [
+            sg.Text("Language pair:"),
+            sg.Combo(
+                values=src_language_choices,
+                key="-LANG_SRC-",
+                readonly=True,
+                enable_events=True,
+                default_value=current_src_lang,
+                size=(8, 1),
+            ),
+            sg.Text("->"),
+            sg.Combo(
+                values=tgt_language_choices,
+                key="-LANG_DST-",
+                readonly=True,
+                enable_events=True,
+                default_value=current_tgt_lang,
+                size=(8, 1),
+            ),
+            sg.Text("", key="-LANG_SUMMARY-", expand_x=True),
+        ],
+        [
+            sg.TabGroup(
+                [
+                    [
+                        sg.Tab("Video", video_tab_layout, key=TAB_VIDEO),
+                        sg.Tab("Audio", audio_tab_layout, key=TAB_AUDIO),
+                    ]
+                ],
+                key="-MAIN_TABS-",
+                enable_events=True,
+                expand_x=True,
+            )
+        ],
+        [
+            sg.Text("TTS voice:"),
+            sg.Combo(
+                values=voices,
+                key="-VOICE-",
+                readonly=True,
+                enable_events=True,
+                default_value=(
+                    current_voice
+                    if current_voice in voices
+                    else (voices[0] if voices else "")
+                ),
+                disabled=(len(voices) == 0),
+                size=(40, 1),
+            ),
+            sg.Button("> Preview", key="-PREVIEW-", disabled=(len(voices) == 0)),
+            sg.Text("", key="-VOICE_ERROR-", text_color="red", size=(40, 1)),
+        ],
+        [
+            sg.Text("Output folder:"),
+            sg.Input(key="-OUT-", expand_x=True),
+            sg.FolderBrowse("...", key="-BROWSE_OUT-"),
+        ],
         [sg.Checkbox("Use GPU?", key="-GPU-")],
         [sg.Checkbox("Delete subtitles?", key="-SRT-")],
         [sg.Checkbox("Regenerate all steps (ignore cache)", key="-REBUILD-")],
         [sg.Checkbox("Cleanup temp files after success", key="-CLEANUP-")],
-        [sg.Button("Steps...", key="-STEPS-"),
-         sg.Text(steps_summary(current_steps), key="-STEPS_SUMMARY-", expand_x=True)],
-        [sg.Button("Models...", key="-MODELS-"),
-         sg.Text("", key="-MODEL_SUMMARY-", expand_x=True)],
+        [
+            sg.Button("Steps...", key="-STEPS-"),
+            sg.Text(steps_summary(current_steps), key="-STEPS_SUMMARY-", expand_x=True),
+        ],
+        [
+            sg.Button("Models...", key="-MODELS-"),
+            sg.Text("", key="-MODEL_SUMMARY-", expand_x=True),
+        ],
         [sg.Text("Extra CLI arguments (optional):")],
         [sg.Input(key="-EXTRA-", expand_x=True)],
-        [sg.Multiline(
-            key="-LOGBOX-",
-            size=(80, 20),
-            autoscroll=True,
-            disabled=True,
-            font=("Consolas", 9),
-            expand_x=True,
-            expand_y=True,
-        )],
+        [
+            sg.Multiline(
+                key="-LOGBOX-",
+                size=(80, 20),
+                autoscroll=True,
+                disabled=True,
+                font=("Consolas", 9),
+                expand_x=True,
+                expand_y=True,
+            )
+        ],
         [sg.Input(key="-TRANSLATION_MODEL_ID-", visible=False, enable_events=False)],
-        [sg.Button("Start", key="-START-"),
-         sg.Button("Exit", key="-EXIT-"),
-         sg.Text("СДЕЛАНО: 0/0 (0%)", key="-STATUS-")],
+        [
+            sg.Button("Start", key="-START-"),
+            sg.Button("Exit", key="-EXIT-"),
+            sg.Text("СДЕЛАНО: 0/0 (0%)", key="-STATUS-"),
+        ],
     ]
 
     window = sg.Window(
@@ -1495,7 +1647,9 @@ def main():
     window["-INPUT_PATH-"].update(default_input_path)
     window["-TEXT_PATH-"].update(str((base_paths_cfg.get("input_text") or "")))
     window["-OUT-"].update(default_out_dir)
-    window["-MOVE_TO_DIR-"].update((BASE_CFG.get("output") or {}).get("move_to_dir", ""))
+    window["-MOVE_TO_DIR-"].update(
+        (BASE_CFG.get("output") or {}).get("move_to_dir", "")
+    )
     window["-GPU-"].update(True)
     window["-CLEANUP-"].update(True)
     window["-TRANSLATION_MODEL_ID-"].update(current_translation_model_id)
@@ -1516,11 +1670,14 @@ def main():
     running = False
     last_run_count = 0
     set_source_mode(window, default_is_dir)
-    sync_update_existing_controls(window, {
-        "-UPDATE_EXISTING_FILE-": bool(window["-UPDATE_EXISTING_FILE-"].get()),
-        "-SRC_DIR-": default_is_dir,
-        "-INPUT_PATH-": window["-INPUT_PATH-"].get(),
-    })
+    sync_update_existing_controls(
+        window,
+        {
+            "-UPDATE_EXISTING_FILE-": bool(window["-UPDATE_EXISTING_FILE-"].get()),
+            "-SRC_DIR-": default_is_dir,
+            "-INPUT_PATH-": window["-INPUT_PATH-"].get(),
+        },
+    )
     if voices:
         _emit_info(window, f"Voices loaded: {len(voices)}")
     else:
@@ -1582,10 +1739,13 @@ def main():
                 window["-INPUT_PATH-"].update(selected_path)
                 if values.get("-SRC_FILE-", True):
                     window["-PROJECT-"].update(Path(selected_path).stem)
-                sync_update_existing_controls(window, {
-                    **values,
-                    "-INPUT_PATH-": selected_path,
-                })
+                sync_update_existing_controls(
+                    window,
+                    {
+                        **values,
+                        "-INPUT_PATH-": selected_path,
+                    },
+                )
 
         if event == "-BROWSE_TEXT-":
             selected_path = browse_text_file()
@@ -1604,14 +1764,20 @@ def main():
             _emit_info(window, f"Voice selected: {current_voice}")
 
         if event in ("-LANG_SRC-", "-LANG_DST-"):
-            current_src_lang = normalize_language_code(values.get("-LANG_SRC-", current_src_lang), default="en")
-            current_tgt_lang = normalize_language_code(values.get("-LANG_DST-", current_tgt_lang), default="ru")
+            current_src_lang = normalize_language_code(
+                values.get("-LANG_SRC-", current_src_lang), default="en"
+            )
+            current_tgt_lang = normalize_language_code(
+                values.get("-LANG_DST-", current_tgt_lang), default="ru"
+            )
             lang_summary_text, lang_summary_color = _language_pair_summary(
                 current_src_lang,
                 current_tgt_lang,
                 translate_enabled=bool(current_steps.get("translate", False)),
             )
-            window["-LANG_SUMMARY-"].update(lang_summary_text, text_color=lang_summary_color)
+            window["-LANG_SUMMARY-"].update(
+                lang_summary_text, text_color=lang_summary_color
+            )
             if current_translation_model_id:
                 summary_text, summary_color = _translation_summary(
                     current_translation_model_id,
@@ -1619,7 +1785,10 @@ def main():
                     current_tgt_lang,
                 )
                 window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
-            _emit_info(window, f"Language pair selected: {current_src_lang} -> {current_tgt_lang}")
+            _emit_info(
+                window,
+                f"Language pair selected: {current_src_lang} -> {current_tgt_lang}",
+            )
 
         if event == "-PREVIEW-":
             if preview.is_active():
@@ -1629,14 +1798,23 @@ def main():
                 continue
 
             selected_display = values.get("-VOICE-", "")
-            selected_voice_id = voice_id_by_display.get(selected_display, selected_display)
+            selected_voice_id = voice_id_by_display.get(
+                selected_display, selected_display
+            )
             if not selected_voice_id:
                 msg = "No voice selected for preview"
                 window["-VOICE_ERROR-"].update(msg)
                 _emit_info(window, f"Preview error: {msg}")
                 continue
 
-            preview_text = ((cfg.tts.preview_text if cfg is not None else "This is a preview of the selected voice.") or "").strip()
+            preview_text = (
+                (
+                    cfg.tts.preview_text
+                    if cfg is not None
+                    else "This is a preview of the selected voice."
+                )
+                or ""
+            ).strip()
             if not preview_text:
                 msg = "preview_text is empty in the configuration"
                 window["-VOICE_ERROR-"].update(msg)
@@ -1647,10 +1825,16 @@ def main():
             window["-PREVIEW-"].update("⏹ Stop")
             _emit_info(window, f"Preview started: voice={selected_voice_id}")
             preview.start_preview(
-                model_name=(cfg.tts.model_name if cfg is not None else "tts_models/multilingual/multi-dataset/xtts_v2"),
+                model_name=(
+                    cfg.tts.model_name
+                    if cfg is not None
+                    else "tts_models/multilingual/multi-dataset/xtts_v2"
+                ),
                 voice_id=selected_voice_id,
                 preview_text=preview_text,
-                use_gpu=bool(values.get("-GPU-", cfg.usegpu if cfg is not None else True)),
+                use_gpu=bool(
+                    values.get("-GPU-", cfg.usegpu if cfg is not None else True)
+                ),
                 lang=current_tgt_lang,
                 window=window,
             )
@@ -1671,7 +1855,6 @@ def main():
                 _emit_info(window, f"Preview error: {msg}")
                 window["-PREVIEW-"].update("▶ Preview")
 
-
         if event == "-PLAY_AUDIO-":
             if audio_play.is_active():
                 audio_play.stop()
@@ -1680,7 +1863,9 @@ def main():
                 continue
 
             selected_display = values.get("-VOICE-", "")
-            selected_voice_id = voice_id_by_display.get(selected_display, selected_display)
+            selected_voice_id = voice_id_by_display.get(
+                selected_display, selected_display
+            )
             if not selected_voice_id:
                 msg = "No voice selected for audio playback."
                 window["-AUDIO_ERROR-"].update(msg)
@@ -1695,11 +1880,16 @@ def main():
 
             window["-AUDIO_ERROR-"].update("")
             window["-PLAY_AUDIO-"].update("■ Stop")
-            _emit_info(window, f"Audio playback synthesis started: {Path(values.get('-TEXT_PATH-', '')).name}")
+            _emit_info(
+                window,
+                f"Audio playback synthesis started: {Path(values.get('-TEXT_PATH-', '')).name}",
+            )
             audio_play.start(
                 voice_id=selected_voice_id,
                 text_file=values.get("-TEXT_PATH-", "").strip(),
-                use_gpu=bool(values.get("-GPU-", cfg.usegpu if cfg is not None else True)),
+                use_gpu=bool(
+                    values.get("-GPU-", cfg.usegpu if cfg is not None else True)
+                ),
                 window=window,
             )
 
@@ -1724,12 +1914,16 @@ def main():
 
         if event == "-START-":
             if running:
-                sg.popup("A process is already running. Please wait for it to finish.", title="Info")
+                sg.popup(
+                    "A process is already running. Please wait for it to finish.",
+                    title="Info",
+                )
                 continue
             if bool(current_steps.get("translate", False)):
                 ready_model_id = ensure_translation_model_ready_for_start(
                     window,
-                    current_translation_model_id or values.get("-TRANSLATION_MODEL_ID-", ""),
+                    current_translation_model_id
+                    or values.get("-TRANSLATION_MODEL_ID-", ""),
                     src_lang=current_src_lang,
                     tgt_lang=current_tgt_lang,
                 )
@@ -1747,12 +1941,25 @@ def main():
                     synced = False
                     sync_message = f"Translation model cannot be checked: {exc}"
                 if not synced:
-                    sg.popup_error(sync_message, title="Translation model required", keep_on_top=True)
+                    sg.popup_error(
+                        sync_message,
+                        title="Translation model required",
+                        keep_on_top=True,
+                    )
                     _emit_info(window, sync_message)
                     continue
-                window["-TRANSLATION_MODEL_ID-"].update(values["-TRANSLATION_MODEL_ID-"])
+                window["-TRANSLATION_MODEL_ID-"].update(
+                    values["-TRANSLATION_MODEL_ID-"]
+                )
                 _emit_info(window, f"Translation model ready for start: {sync_message}")
-            run_count = handle_start_event(values, current_steps, video_exts, window, voice_id_by_display, progress_state)
+            run_count = handle_start_event(
+                values,
+                current_steps,
+                video_exts,
+                window,
+                voice_id_by_display,
+                progress_state,
+            )
             if run_count:
                 last_run_count = run_count
                 running = True
@@ -1762,7 +1969,9 @@ def main():
 
         if event == "-DONE-":
             running = False
-            handle_done_event(window, values, BASE_TITLE, last_run_count, progress_state)
+            handle_done_event(
+                window, values, BASE_TITLE, last_run_count, progress_state
+            )
 
         if event == "-AUDIO_DONE-":
             running = False
@@ -1803,7 +2012,9 @@ def main():
                 )
                 window["-MODEL_SUMMARY-"].update(summary_text, text_color=summary_color)
                 spec = get_model_spec(current_translation_model_id)
-                _emit_info(window, f"Translation model selected: {spec.label} [{spec.id}]")
+                _emit_info(
+                    window, f"Translation model selected: {spec.label} [{spec.id}]"
+                )
 
         if event == "-STEPS-":
             current_steps = show_steps_modal(window, current_steps)
@@ -1813,7 +2024,9 @@ def main():
                 current_tgt_lang,
                 translate_enabled=bool(current_steps.get("translate", False)),
             )
-            window["-LANG_SUMMARY-"].update(lang_summary_text, text_color=lang_summary_color)
+            window["-LANG_SUMMARY-"].update(
+                lang_summary_text, text_color=lang_summary_color
+            )
 
     preview.stop()
     audio_play.stop()

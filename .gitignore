@@ -12,6 +12,17 @@ __pycache__/
 # C extensions
 *.so
 
+# Local repository-intelligence state
+.code-review-graph/
+graphify-out/
+
+# Optional generated working directories, only if not already covered:
+out/
+temp/
+work/
+bench_logs/
+
+
 # Distribution / packaging
 .arc/
 .Python

@@ -25,7 +25,7 @@ steps:
   tts: true
   merge: true
 output:
-  move_to_dir: E:\Lessons\UE\!!![Kirk]Game Ready Landscape Shader\
+  move_to_dir: E:/DownYoutube/NI
 tts:
   voice: Luis Moray
   sample_rate: 22050
