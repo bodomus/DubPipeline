@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import gc
-import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dubpipeline.models.catalog import (
@@ -12,139 +9,38 @@ from dubpipeline.models.catalog import (
     is_unsupported_pair_reason,
     resolve_model_spec,
 )
-from dubpipeline.models.storage import configure_argos_packages_dir, get_argos_packages_dir
+from dubpipeline.translation.providers import (
+    ActiveModel,
+    HfSeq2SeqTranslationProvider,
+    TranslationModelError,
+    TranslationModelUnavailableError,
+    TranslationProvider,
+    TranslationProviderContext,
+    create_translation_provider,
+    model_not_installed_message,
+    provider_id_for_backend,
+    resolve_translation_provider_id,
+)
 
 if TYPE_CHECKING:
     from dubpipeline.config import PipelineConfig
 
-_WS_RE = re.compile(r"\s+", re.UNICODE)
-_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+", re.UNICODE)
-_TORCH_26_LOAD_ERROR_MARKERS = (
-    "upgrade torch to at least v2.6",
-    "upgrade torch to at least 2.6",
-    "cve-2025-32434",
-)
-
-_NLLB_LANG_MAP = {
-    "en": "eng_Latn",
-    "ru": "rus_Cyrl",
-    "de": "deu_Latn",
-    "fr": "fra_Latn",
-    "es": "spa_Latn",
-    "it": "ita_Latn",
-    "pt": "por_Latn",
-    "uk": "ukr_Cyrl",
-    "pl": "pol_Latn",
-}
-
-
-def model_not_installed_message(model_label: str, src_lang: str, tgt_lang: str) -> str:
-    pair = f"{src_lang}->{tgt_lang}"
-    return (
-        f"Translation model '{model_label}' for {pair} is not installed. "
-        "Cannot continue translation. Open Models -> Install to download it."
-    )
-
-
-def _parse_torch_version(version: str) -> tuple[int, int, int]:
-    match = re.match(r"^\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?", version or "")
-    if not match:
-        return (0, 0, 0)
-    return tuple(int(part or 0) for part in match.groups())
-
-
-def _torch_version_is_below_26(version: str) -> bool:
-    return _parse_torch_version(version) < (2, 6, 0)
-
-
-def _is_torch_26_bin_weights_error(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return any(marker in text for marker in _TORCH_26_LOAD_ERROR_MARKERS)
-
-
-def _has_bin_weights_without_safetensors(model_ref: str) -> bool:
-    model_dir = Path(model_ref)
-    if not model_dir.exists() or not model_dir.is_dir():
-        return False
-    try:
-        names = {path.name for path in model_dir.iterdir() if path.is_file()}
-    except OSError:
-        return False
-
-    has_bin = bool({"pytorch_model.bin", "pytorch_model.bin.index.json"}.intersection(names))
-    has_safetensors = bool({"model.safetensors", "model.safetensors.index.json"}.intersection(names))
-    return has_bin and not has_safetensors
-
-
-class TranslationModelError(RuntimeError):
-    pass
-
-
-class TranslationModelUnavailableError(TranslationModelError):
-    pass
-
 
 @dataclass(frozen=True)
-class ActiveModel:
-    model_id: str
-    label: str
-    backend: str
-    model_ref: str
-    local_dir: str = ""
-
-
-def _normalize_text(text: str) -> str:
-    text = (text or "").strip()
-    return _WS_RE.sub(" ", text)
-
-
-def _split_sentences(text: str) -> list[str]:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return []
-    chunks = [part.strip() for part in _SENT_SPLIT_RE.split(normalized) if part.strip()]
-    return chunks or [normalized]
-
-
-def _sent_count(text: str) -> int:
-    return len(_split_sentences(text))
-
-
-def _looks_truncated(src: str, translated: str) -> bool:
-    src_norm = _normalize_text(src)
-    out_norm = _normalize_text(translated)
-    if not src_norm:
-        return False
-    if not out_norm:
-        return True
-
-    src_sentences = _sent_count(src_norm)
-    out_sentences = _sent_count(out_norm)
-    if src_sentences >= 2 and out_sentences < src_sentences:
-        return True
-
-    if len(src_norm) >= 120 and len(out_norm) < int(0.35 * len(src_norm)):
-        return True
-
-    return False
-
-
-def _nllb_lang_code(lang_code: str) -> str:
-    code = (lang_code or "").strip()
-    if not code:
-        return "eng_Latn"
-    if "_" in code and len(code) >= 7:
-        return code
-    return _NLLB_LANG_MAP.get(code.lower(), code)
+class ResolvedTranslationRuntime:
+    active_model: ActiveModel
+    provider_id: str
 
 
 class TranslatorService:
-    _HF_CACHE: dict[tuple[str, str], tuple[object, object]] = {}
+    _HF_CACHE = HfSeq2SeqTranslationProvider._HF_CACHE
 
     def __init__(self, cfg: "PipelineConfig") -> None:
         self._cfg = cfg
-        self._active = self._resolve_active_model(cfg)
-        self._hf_cache_key: tuple[str, str] | None = None
+        runtime = self._resolve_runtime(cfg)
+        self._active = runtime.active_model
+        self._provider_id = runtime.provider_id
+        self._provider = self._create_provider()
 
     @property
     def model_id(self) -> str:
@@ -159,6 +55,10 @@ class TranslatorService:
         return self._active.backend
 
     @property
+    def provider_id(self) -> str:
+        return self._provider_id
+
+    @property
     def cache_scope(self) -> str:
         src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
         tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
@@ -168,34 +68,41 @@ class TranslatorService:
     def from_config(cls, cfg: "PipelineConfig") -> "TranslatorService":
         return cls(cfg)
 
-    def _model_not_installed_message(self) -> str:
-        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
-        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
-        return model_not_installed_message(self._active.label, src_lang, tgt_lang)
+    def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
+        return self._provider.translate_texts(texts, sent_fallback=sent_fallback)
 
-    def _torch_bin_weights_message(self, model_ref: str, torch_version: str) -> str:
-        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
-        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
-        pair = f"{src_lang}->{tgt_lang}"
-        location = f" at {model_ref}" if model_ref else ""
-        version = torch_version or "an older version"
-        return (
-            f"Translation model '{self._active.label}' for {pair} is installed{location}, "
-            "but cannot be loaded because this environment uses "
-            f"PyTorch {version} and the local model has PyTorch .bin weights without safetensors. "
-            "Modern Transformers blocks loading these weights with torch < 2.6 due to CVE-2025-32434. "
-            "Upgrade torch and torchaudio to >= 2.6, or install a safetensors version of the model."
-        )
+    def release(self) -> None:
+        self._provider.release()
 
-    def _resolve_active_model(self, cfg: "PipelineConfig") -> ActiveModel:
+    def _load_hf(self) -> tuple[object, object, str]:
+        if not isinstance(self._provider, HfSeq2SeqTranslationProvider):
+            raise TranslationModelUnavailableError(
+                f"translation provider '{self._provider_id}' does not use HF model loading"
+            )
+        return self._provider._load_hf()
+
+    def _resolve_runtime(self, cfg: "PipelineConfig") -> ResolvedTranslationRuntime:
+        requested_provider = (getattr(cfg.translation, "provider", "") or "").strip().lower()
+        if requested_provider and requested_provider != "auto":
+            resolve_translation_provider_id(requested_provider, requested_provider)
+
+        src_lang = (cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (cfg.languages.tgt or "ru").strip().lower() or "ru"
         model_id = (cfg.translation.model_id or "").strip()
+        if requested_provider == "argos":
+            model_id = "argos"
         if not model_id:
             raise TranslationModelUnavailableError(
                 "Translation model is not configured. Please choose a model in Models..."
             )
-        src_lang = (cfg.languages.src or "en").strip().lower() or "en"
-        tgt_lang = (cfg.languages.tgt or "ru").strip().lower() or "ru"
+
         spec = resolve_model_spec(model_id, src_lang, tgt_lang)
+        provider_id = resolve_translation_provider_id(requested_provider, spec.backend)
+        if provider_id != provider_id_for_backend(spec.backend):
+            raise TranslationModelUnavailableError(
+                f"translation provider '{requested_provider}' is not supported for backend '{spec.backend}'"
+            )
+
         status = get_model_status(model_id, src_lang, tgt_lang)
         if not spec.supported:
             raise TranslationModelUnavailableError(
@@ -215,237 +122,26 @@ class TranslatorService:
         if spec.installer == "hf_snapshot" and model_dir is not None and model_dir.exists():
             local_dir = str(model_dir)
 
-        return ActiveModel(
-            model_id=spec.id,
-            label=spec.label,
-            backend=spec.backend,
-            model_ref=spec.model_ref,
-            local_dir=local_dir,
+        return ResolvedTranslationRuntime(
+            active_model=ActiveModel(
+                model_id=spec.id,
+                label=spec.label,
+                backend=spec.backend,
+                model_ref=spec.model_ref,
+                local_dir=local_dir,
+            ),
+            provider_id=provider_id,
         )
 
-    def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
-        if not texts:
-            return []
-        if self.backend == "argos":
-            return self._translate_argos(texts, sent_fallback=sent_fallback)
-        if self.backend in {"nllb", "opus_mt"}:
-            return self._translate_hf(texts, sent_fallback=sent_fallback)
-        raise TranslationModelUnavailableError(
-            f"Translation backend '{self.backend}' is not supported yet. "
-            "Please choose another model in Models..."
+    def _create_provider(self) -> TranslationProvider:
+        src_lang = (self._cfg.languages.src or "en").strip().lower() or "en"
+        tgt_lang = (self._cfg.languages.tgt or "ru").strip().lower() or "ru"
+        context = TranslationProviderContext(
+            active_model=self._active,
+            src_lang=src_lang,
+            tgt_lang=tgt_lang,
+            usegpu=bool(getattr(self._cfg, "usegpu", False)),
+            batch_size=int(getattr(self._cfg.translate, "batch_size", 64)),
+            max_new_tokens=int(getattr(self._cfg.translate, "max_new_tokens", 256)),
         )
-
-    def release(self) -> None:
-        if self._hf_cache_key is None:
-            return
-        cached = self._HF_CACHE.pop(self._hf_cache_key, None)
-        self._hf_cache_key = None
-        if cached is None:
-            return
-
-        _, model = cached
-        try:
-            model.to("cpu")
-        except Exception:
-            pass
-
-        del model
-        try:
-            import torch
-            torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
-
-    def _is_gpu_enabled(self) -> bool:
-        return bool(getattr(self._cfg, "usegpu", False))
-
-    def _device(self) -> str:
-        if not self._is_gpu_enabled():
-            return "cpu"
-        try:
-            import torch
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
-            return "cpu"
-
-    def _load_hf(self) -> tuple[object, object, str]:
-        model_ref = self._active.local_dir or self._active.model_ref
-        if self._active.local_dir and not Path(self._active.local_dir).exists():
-            raise TranslationModelUnavailableError(
-                self._model_not_installed_message()
-            )
-        device = self._device()
-        cache_key = (device, model_ref)
-        self._hf_cache_key = cache_key
-
-        if cache_key in self._HF_CACHE:
-            tokenizer, model = self._HF_CACHE[cache_key]
-            return tokenizer, model, device
-
-        try:
-            import torch
-            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-        except Exception as exc:
-            raise TranslationModelError(
-                "Transformers backend is unavailable. Install dependencies for translation backend."
-            ) from exc
-
-        torch_version = str(getattr(torch, "__version__", ""))
-        if (
-            _has_bin_weights_without_safetensors(model_ref)
-            and _torch_version_is_below_26(torch_version)
-        ):
-            raise TranslationModelUnavailableError(
-                self._torch_bin_weights_message(model_ref, torch_version)
-            )
-
-        tokenizer = AutoTokenizer.from_pretrained(model_ref, local_files_only=True)
-
-        load_kwargs = {"local_files_only": True}
-        if device.startswith("cuda"):
-            load_kwargs["torch_dtype"] = torch.float16
-
-        try:
-            model = AutoModelForSeq2SeqLM.from_pretrained(
-                model_ref,
-                use_safetensors=True,
-                **load_kwargs,
-            )
-        except Exception:
-            try:
-                model = AutoModelForSeq2SeqLM.from_pretrained(
-                    model_ref,
-                    use_safetensors=False,
-                    **load_kwargs,
-                )
-            except Exception as exc:
-                if _is_torch_26_bin_weights_error(exc):
-                    raise TranslationModelUnavailableError(
-                        self._torch_bin_weights_message(model_ref, torch_version)
-                    ) from exc
-                raise TranslationModelUnavailableError(self._model_not_installed_message()) from exc
-
-        model.eval()
-        model.to(device)
-        self._HF_CACHE[cache_key] = (tokenizer, model)
-        return tokenizer, model, device
-
-    def _hf_generate(
-        self,
-        batch: list[str],
-        tokenizer: object,
-        model: object,
-        device: str,
-    ) -> list[str]:
-        import torch
-
-        src_lang = (self._cfg.languages.src or "en").strip()
-        tgt_lang = (self._cfg.languages.tgt or "ru").strip()
-        generation_kwargs: dict[str, int] = {}
-
-        if self.backend == "nllb":
-            src_code = _nllb_lang_code(src_lang)
-            tgt_code = _nllb_lang_code(tgt_lang)
-            if hasattr(tokenizer, "src_lang"):
-                tokenizer.src_lang = src_code
-            lang_map = getattr(tokenizer, "lang_code_to_id", {}) or {}
-            forced_bos = lang_map.get(tgt_code)
-            if forced_bos is not None:
-                generation_kwargs["forced_bos_token_id"] = int(forced_bos)
-
-        inputs = tokenizer(
-            batch,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512,
-        )
-        inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
-
-        max_new_tokens = int(self._cfg.translate.max_new_tokens)
-        if device.startswith("cuda"):
-            with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
-                out_ids = model.generate(
-                    **inputs,
-                    num_beams=1,
-                    do_sample=False,
-                    max_new_tokens=max_new_tokens,
-                    **generation_kwargs,
-                )
-        else:
-            with torch.inference_mode():
-                out_ids = model.generate(
-                    **inputs,
-                    num_beams=1,
-                    do_sample=False,
-                    max_new_tokens=max_new_tokens,
-                    **generation_kwargs,
-                )
-        return tokenizer.batch_decode(out_ids, skip_special_tokens=True)
-
-    def _translate_hf(self, texts: list[str], *, sent_fallback: bool) -> list[str]:
-        tokenizer, model, device = self._load_hf()
-        batch_size = max(1, int(self._cfg.translate.batch_size))
-
-        order = sorted(range(len(texts)), key=lambda idx: len(texts[idx] or ""))
-        sorted_texts = [texts[idx] for idx in order]
-        sorted_out: list[str] = []
-
-        for offset in range(0, len(sorted_texts), batch_size):
-            batch = sorted_texts[offset:offset + batch_size]
-            translated = self._hf_generate(batch, tokenizer, model, device)
-
-            if sent_fallback:
-                fixed: list[str] = []
-                for src, ru in zip(batch, translated):
-                    if _looks_truncated(src, ru):
-                        parts = _split_sentences(src)
-                        if len(parts) > 1:
-                            translated_parts: list[str] = []
-                            for part_offset in range(0, len(parts), batch_size):
-                                part_batch = parts[part_offset:part_offset + batch_size]
-                                translated_parts.extend(
-                                    self._hf_generate(part_batch, tokenizer, model, device)
-                                )
-                            ru = " ".join(x.strip() for x in translated_parts if x and x.strip()).strip()
-                    fixed.append(ru)
-                translated = fixed
-
-            sorted_out.extend(translated)
-
-        out = [""] * len(texts)
-        for sorted_idx, original_idx in enumerate(order):
-            out[original_idx] = sorted_out[sorted_idx]
-        return out
-
-    def _translate_argos(self, texts: list[str], *, sent_fallback: bool) -> list[str]:
-        src_lang = (self._cfg.languages.src or "en").strip()
-        tgt_lang = (self._cfg.languages.tgt or "ru").strip()
-
-        configure_argos_packages_dir(create=True)
-
-        try:
-            from argostranslate import package, translate
-        except Exception as exc:
-            raise TranslationModelUnavailableError(
-                self._model_not_installed_message()
-            ) from exc
-
-        installed = package.get_installed_packages(path=get_argos_packages_dir(create=True))
-        if not any(
-            getattr(pkg, "from_code", None) == src_lang and getattr(pkg, "to_code", None) == tgt_lang
-            for pkg in installed
-        ):
-            raise TranslationModelUnavailableError(self._model_not_installed_message())
-
-        out: list[str] = []
-        for src in texts:
-            ru = translate.translate(src, src_lang, tgt_lang)
-            if sent_fallback and _looks_truncated(src, ru):
-                parts = _split_sentences(src)
-                if len(parts) > 1:
-                    ru_parts = [translate.translate(part, src_lang, tgt_lang) for part in parts]
-                    ru = " ".join(part.strip() for part in ru_parts if part and part.strip()).strip()
-            out.append(ru)
-        return out
+        return create_translation_provider(self._provider_id, context)
