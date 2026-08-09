@@ -4,9 +4,10 @@ import gc
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from dubpipeline.models.storage import configure_argos_packages_dir, get_argos_packages_dir
+from dubpipeline.utils.logging import step
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+", re.UNICODE)
@@ -27,6 +28,25 @@ _NLLB_LANG_MAP = {
     "uk": "ukr_Cyrl",
     "pl": "pol_Latn",
 }
+
+DEFAULT_QWEN_TRANSLATION_PROMPT = (
+    "Translate English speech into natural Russian.\n"
+    "Rules:\n"
+    "- Preserve the exact meaning.\n"
+    "- Write natural spoken Russian.\n"
+    "- Do not add explanations.\n"
+    "- Do not omit technical information.\n"
+    "- Preserve technical terms when appropriate.\n"
+    "- Prefer concise phrasing suitable for voice dubbing.\n"
+    "- Return only the Russian translation."
+)
+
+_QWEN_LABEL_PREFIX_RE = re.compile(
+    r"^\s*(?:translation|translated text|russian translation|перевод)\s*[:：-]\s*",
+    re.IGNORECASE,
+)
+_QWEN_FENCE_RE = re.compile(r"^\s*```(?:\w+)?\s*|\s*```\s*$", re.IGNORECASE)
+_QWEN_THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 
 
 class TranslationModelError(RuntimeError):
@@ -54,6 +74,11 @@ class TranslationProviderContext:
     usegpu: bool
     batch_size: int
     max_new_tokens: int
+    qwen_model: str = ""
+    qwen_device: str = "auto"
+    qwen_dtype: str = "auto"
+    qwen_max_new_tokens: int = 0
+    qwen_prompt: str = ""
 
 
 class TranslationProvider(Protocol):
@@ -412,12 +437,231 @@ class ArgosTranslationProvider(BaseTranslationProvider):
         return out
 
 
+class QwenTranslationProvider(BaseTranslationProvider):
+    provider_id = "qwen"
+
+    _QWEN_CACHE: dict[tuple[str, str, str], tuple[object, object]] = {}
+
+    def __init__(self, context: TranslationProviderContext) -> None:
+        super().__init__(context)
+        self._cache_key: tuple[str, str, str] | None = None
+
+    def translate_texts(self, texts: list[str], *, sent_fallback: bool = True) -> list[str]:
+        _ = sent_fallback
+        if not texts:
+            return []
+
+        tokenizer, model, device = self._load_qwen()
+        out: list[str] = []
+        for text in texts:
+            if not _normalize_text(text):
+                out.append("")
+                continue
+            prompt = self.build_prompt(text)
+            raw = self._generate(prompt, tokenizer, model, device)
+            out.append(self.clean_translation_output(raw))
+        return out
+
+    def release(self) -> None:
+        if self._cache_key is None:
+            return
+        cached = self._QWEN_CACHE.pop(self._cache_key, None)
+        self._cache_key = None
+        if cached is None:
+            return
+
+        _, model = cached
+        try:
+            model.to("cpu")
+        except Exception:
+            pass
+        del model
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        gc.collect()
+
+    def build_prompt(self, text: str) -> str:
+        prompt = (self.context.qwen_prompt or DEFAULT_QWEN_TRANSLATION_PROMPT).strip()
+        return f"{prompt}\n\nText:\n{text.strip()}"
+
+    @classmethod
+    def clean_translation_output(cls, text: str) -> str:
+        cleaned = _QWEN_THINK_RE.sub("", text or "")
+        cleaned = _QWEN_FENCE_RE.sub("", cleaned).strip()
+        cleaned = _QWEN_LABEL_PREFIX_RE.sub("", cleaned).strip()
+
+        lines = [line.strip() for line in cleaned.splitlines()]
+        lines = [line for line in lines if line]
+        if len(lines) > 1:
+            # Keep concise text while dropping obvious assistant boilerplate.
+            filtered: list[str] = []
+            for line in lines:
+                low = line.lower()
+                if low.startswith(("note:", "explanation:", "analysis:", "комментарий:")):
+                    continue
+                filtered.append(_QWEN_LABEL_PREFIX_RE.sub("", line).strip())
+            lines = [line for line in filtered if line]
+        cleaned = " ".join(lines) if lines else cleaned
+        cleaned = cleaned.strip().strip('"').strip("'").strip()
+        return _normalize_text(cleaned)
+
+    def _model_ref(self) -> str:
+        return (self.context.qwen_model or self.active_model.model_ref or "Qwen/Qwen3-8B").strip()
+
+    def _device(self) -> str:
+        requested = (self.context.qwen_device or "auto").strip().lower()
+        if requested not in {"auto", "cuda", "cpu"}:
+            raise TranslationModelUnavailableError(
+                f"translation provider 'qwen' device '{requested}' is not supported"
+            )
+        try:
+            import torch
+        except Exception as exc:
+            raise TranslationModelError(
+                "Translation provider 'qwen' is unavailable. Install torch and transformers dependencies."
+            ) from exc
+
+        cuda_available = bool(torch.cuda.is_available())
+        if requested == "cuda":
+            if not cuda_available:
+                raise TranslationModelUnavailableError(
+                    "translation provider 'qwen' requested CUDA but CUDA is not available"
+                )
+            return "cuda"
+        if requested == "cpu":
+            return "cpu"
+        if self.context.usegpu and cuda_available:
+            return "cuda"
+        return "cpu"
+
+    def _torch_dtype(self, torch_module: Any, device: str) -> object:
+        requested = (self.context.qwen_dtype or "auto").strip().lower()
+        if requested in {"", "auto"}:
+            return "auto"
+        if requested in {"float16", "fp16"}:
+            return torch_module.float16
+        if requested in {"bfloat16", "bf16"}:
+            return torch_module.bfloat16
+        if requested in {"float32", "fp32"}:
+            return torch_module.float32
+        raise TranslationModelUnavailableError(
+            f"translation provider 'qwen' dtype '{requested}' is not supported"
+        )
+
+    def _load_qwen(self) -> tuple[object, object, str]:
+        model_ref = self._model_ref()
+        device = self._device()
+        dtype_key = (self.context.qwen_dtype or "auto").strip().lower() or "auto"
+        cache_key = (model_ref, device, dtype_key)
+        self._cache_key = cache_key
+
+        if cache_key in self._QWEN_CACHE:
+            tokenizer, model = self._QWEN_CACHE[cache_key]
+            return tokenizer, model, device
+
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except Exception as exc:
+            raise TranslationModelError(
+                "Translation provider 'qwen' is unavailable. Install transformers dependencies."
+            ) from exc
+
+        if self.active_model.local_dir and not Path(self.active_model.local_dir).exists():
+            raise TranslationModelUnavailableError(self._model_not_installed_message())
+
+        resolved_ref = self.active_model.local_dir or model_ref
+        step(f"Loading Qwen translation model: {model_ref} (device={device}, dtype={dtype_key})\n")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(resolved_ref, local_files_only=True)
+            model = AutoModelForCausalLM.from_pretrained(
+                resolved_ref,
+                local_files_only=True,
+                torch_dtype=self._torch_dtype(torch, device),
+            )
+        except Exception as exc:
+            raise TranslationModelUnavailableError(
+                "Translation provider 'qwen' cannot load local model "
+                f"'{model_ref}'. Install/cache it first with Models -> Install, or choose another model."
+            ) from exc
+
+        model.eval()
+        model.to(device)
+        self._QWEN_CACHE[cache_key] = (tokenizer, model)
+        return tokenizer, model, device
+
+    def _format_chat_prompt(self, prompt: str, tokenizer: object) -> str:
+        if hasattr(tokenizer, "apply_chat_template"):
+            messages = [
+                {"role": "system", "content": self.context.qwen_prompt or DEFAULT_QWEN_TRANSLATION_PROMPT},
+                {"role": "user", "content": prompt.split("\n\nText:\n", 1)[-1]},
+            ]
+            try:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        return prompt
+
+    def _generate(
+        self,
+        prompt: str,
+        tokenizer: object,
+        model: object,
+        device: str,
+    ) -> str:
+        import torch
+
+        formatted_prompt = self._format_chat_prompt(prompt, tokenizer)
+        inputs = tokenizer(
+            formatted_prompt,
+            return_tensors="pt",
+            padding=False,
+            truncation=True,
+            max_length=2048,
+        )
+        inputs = {name: tensor.to(device) for name, tensor in inputs.items()}
+        input_ids = inputs.get("input_ids")
+        input_len = int(getattr(input_ids, "shape", [0, 0])[-1]) if input_ids is not None else 0
+        pad_token_id = getattr(tokenizer, "pad_token_id", None)
+        if pad_token_id is None:
+            pad_token_id = getattr(tokenizer, "eos_token_id", None)
+
+        max_new_tokens = int(self.context.qwen_max_new_tokens or self.context.max_new_tokens or 512)
+        with torch.inference_mode():
+            out_ids = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                num_beams=1,
+                pad_token_id=pad_token_id,
+            )
+
+        try:
+            generated_ids = out_ids[:, input_len:]
+        except Exception:
+            generated_ids = out_ids
+        return tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+
 _PROVIDER_BY_ID = {
     "argos": ArgosTranslationProvider,
     "hf": HfSeq2SeqTranslationProvider,
+    "qwen": QwenTranslationProvider,
 }
 
-PUBLIC_TRANSLATION_PROVIDERS = ("auto", "argos")
+PUBLIC_TRANSLATION_PROVIDERS = ("auto", "argos", "qwen")
 
 
 def provider_id_for_backend(backend: str) -> str:
@@ -426,6 +670,8 @@ def provider_id_for_backend(backend: str) -> str:
         return "argos"
     if normalized in {"nllb", "opus_mt", "hf"}:
         return "hf"
+    if normalized in {"llm_qwen", "qwen"}:
+        return "qwen"
     return normalized
 
 

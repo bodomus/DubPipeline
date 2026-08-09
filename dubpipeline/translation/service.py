@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from dubpipeline.models.catalog import (
+    ModelStatus,
     get_model_install_dir,
     get_model_status,
     is_unsupported_pair_reason,
     resolve_model_spec,
 )
+from dubpipeline.models.storage import get_hf_snapshot_dir
 from dubpipeline.translation.providers import (
     ActiveModel,
     HfSeq2SeqTranslationProvider,
+    QwenTranslationProvider,
     TranslationModelError,
     TranslationModelUnavailableError,
     TranslationProvider,
@@ -34,6 +37,7 @@ class ResolvedTranslationRuntime:
 
 class TranslatorService:
     _HF_CACHE = HfSeq2SeqTranslationProvider._HF_CACHE
+    _QWEN_CACHE = QwenTranslationProvider._QWEN_CACHE
 
     def __init__(self, cfg: "PipelineConfig") -> None:
         self._cfg = cfg
@@ -91,19 +95,28 @@ class TranslatorService:
         model_id = (cfg.translation.model_id or "").strip()
         if requested_provider == "argos":
             model_id = "argos"
+        if requested_provider == "qwen":
+            model_id = "qwen3_8b"
         if not model_id:
             raise TranslationModelUnavailableError(
                 "Translation model is not configured. Please choose a model in Models..."
             )
 
         spec = resolve_model_spec(model_id, src_lang, tgt_lang)
+        model_ref_override = (getattr(cfg.translation, "model", "") or "").strip()
+        if requested_provider == "qwen" and model_ref_override:
+            spec = replace(spec, model_ref=model_ref_override)
         provider_id = resolve_translation_provider_id(requested_provider, spec.backend)
         if provider_id != provider_id_for_backend(spec.backend):
             raise TranslationModelUnavailableError(
                 f"translation provider '{requested_provider}' is not supported for backend '{spec.backend}'"
             )
 
-        status = get_model_status(model_id, src_lang, tgt_lang)
+        if requested_provider == "qwen" and model_ref_override:
+            available, reason = spec.local_check(spec)
+            status = ModelStatus(available=available, enabled=available, reason=reason)
+        else:
+            status = get_model_status(model_id, src_lang, tgt_lang)
         if not spec.supported:
             raise TranslationModelUnavailableError(
                 "Model is planned and not supported yet"
@@ -118,7 +131,10 @@ class TranslatorService:
             )
 
         local_dir = ""
-        model_dir = get_model_install_dir(spec.id, src_lang, tgt_lang)
+        if provider_id == "qwen":
+            model_dir = get_hf_snapshot_dir(spec.model_ref, create=False)
+        else:
+            model_dir = get_model_install_dir(spec.id, src_lang, tgt_lang)
         if spec.installer == "hf_snapshot" and model_dir is not None and model_dir.exists():
             local_dir = str(model_dir)
 
@@ -143,5 +159,10 @@ class TranslatorService:
             usegpu=bool(getattr(self._cfg, "usegpu", False)),
             batch_size=int(getattr(self._cfg.translate, "batch_size", 64)),
             max_new_tokens=int(getattr(self._cfg.translate, "max_new_tokens", 256)),
+            qwen_model=str(getattr(self._cfg.translation, "model", "") or ""),
+            qwen_device=str(getattr(self._cfg.translation, "device", "auto") or "auto"),
+            qwen_dtype=str(getattr(self._cfg.translation, "dtype", "auto") or "auto"),
+            qwen_max_new_tokens=int(getattr(self._cfg.translation, "max_new_tokens", 0) or 0),
+            qwen_prompt=str(getattr(self._cfg.translation, "prompt", "") or ""),
         )
         return create_translation_provider(self._provider_id, context)

@@ -59,6 +59,11 @@ audio_merge:
     true_peak: -1.5
 translation:
   provider: auto
+  model: ''
+  device: auto
+  dtype: auto
+  max_new_tokens: 0
+  prompt: ''
   model_id: opus_mt
   backend: opus_mt
   model_ref: Helsinki-NLP/opus-mt-en-de

@@ -114,6 +114,12 @@ class CliTests(unittest.TestCase):
         cli_set = _build_cli_set(args, parser)
         self.assertIn("translation.provider=argos", cli_set)
 
+    def test_translation_provider_qwen_adds_cli_override(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "qwen"])
+        cli_set = _build_cli_set(args, parser)
+        self.assertIn("translation.provider=qwen", cli_set)
+
     def test_translation_provider_rejects_unknown_value(self):
         parser = build_parser()
         stderr = io.StringIO()

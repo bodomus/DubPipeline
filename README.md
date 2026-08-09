@@ -211,9 +211,34 @@ The CLI exposes the same setting:
 python -m dubpipeline.cli run video.pipeline.yaml --translation-provider argos
 ```
 
-Supported public values are `auto` and `argos`. Future providers should add a provider class,
-register it in the provider factory, add tests that do not download models, and only then expose
-the value in config/CLI.
+Supported public values are `auto`, `argos`, and `qwen`. Future providers should add a provider
+class, register it in the provider factory, add tests that do not download models, and only then
+expose the value in config/CLI.
+
+### Local Qwen Provider
+
+The Qwen provider uses a locally cached Hugging Face snapshot and does not download model files
+during translation. Install/cache the model first through the Models flow.
+
+```yaml
+translation:
+  provider: qwen
+  model_id: qwen3_8b
+  model: Qwen/Qwen3-8B
+  device: cuda
+  dtype: auto
+  max_new_tokens: 512
+```
+
+CLI smoke example:
+
+```powershell
+python -m dubpipeline.cli run video.pipeline.yaml --translation-provider qwen --set translation.device=cuda --set translation.model=Qwen/Qwen3-8B
+```
+
+Qwen loads the tokenizer/model once per process cache key and reuses it across segment translation
+calls. Use `translation.device=cpu` only deliberately; `translation.device=cuda` fails clearly when
+CUDA is unavailable.
 
 ## Target-Aware Outputs
 

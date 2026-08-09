@@ -263,6 +263,17 @@ _MODEL_SPECS: tuple[ModelSpec, ...] = (
         estimated_size_bytes=14 * 1024 * 1024 * 1024,
     ),
     ModelSpec(
+        id="qwen3_8b",
+        tier="B",
+        label="Qwen3 (8B)",
+        backend="llm_qwen",
+        model_ref="Qwen/Qwen3-8B",
+        supported=True,
+        installer="hf_snapshot",
+        local_check=_check_hf_model_available,
+        estimated_size_bytes=18 * 1024 * 1024 * 1024,
+    ),
+    ModelSpec(
         id="qwen2_5_7b",
         tier="B",
         label="Qwen2.5 (7B)",

@@ -22,7 +22,9 @@ from dubpipeline.models.catalog import (
 from dubpipeline.translation.service import ActiveModel, TranslationModelUnavailableError, TranslatorService
 from dubpipeline.translation.providers import (
     ArgosTranslationProvider,
+    DEFAULT_QWEN_TRANSLATION_PROMPT,
     HfSeq2SeqTranslationProvider,
+    QwenTranslationProvider,
     TranslationProviderContext,
     create_translation_provider,
     resolve_translation_provider_id,
@@ -40,6 +42,7 @@ class TranslationModelCatalogTests(unittest.TestCase):
         required_ids = {
             "nllb_200_1_3b",
             "nllb_200_3_3b",
+            "qwen3_8b",
             "qwen2_5_7b",
             "qwen2_5_14b",
             "mistral_7b",
@@ -249,12 +252,31 @@ class TranslationPairStatusTests(unittest.TestCase):
             tgt_lang="ru",
             usegpu=False,
             batch_size=1,
-            max_new_tokens=32,
-        )
+                max_new_tokens=32,
+            )
 
         provider = create_translation_provider("argos", context)
 
         self.assertIsInstance(provider, ArgosTranslationProvider)
+
+    def test_provider_factory_creates_qwen_provider(self):
+        context = TranslationProviderContext(
+            active_model=ActiveModel(
+                model_id="qwen3_8b",
+                label="Qwen3 (8B)",
+                backend="llm_qwen",
+                model_ref="Qwen/Qwen3-8B",
+            ),
+            src_lang="en",
+            tgt_lang="ru",
+            usegpu=False,
+            batch_size=1,
+            max_new_tokens=32,
+        )
+
+        provider = create_translation_provider("qwen", context)
+
+        self.assertIsInstance(provider, QwenTranslationProvider)
 
     def test_provider_factory_rejects_unknown_provider(self):
         with self.assertRaisesRegex(TranslationModelUnavailableError, "translation provider 'xyz' is not supported"):
@@ -286,6 +308,210 @@ class TranslationPairStatusTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TranslationModelUnavailableError, "translation provider 'xyz' is not supported"):
             TranslatorService(cfg)
+
+    def test_translator_service_explicit_qwen_provider_selects_default_model(self):
+        cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+        cfg.languages.src = "en"
+        cfg.languages.tgt = "ru"
+        cfg.translation.provider = "qwen"
+
+        with (
+            patch(
+                "dubpipeline.translation.service.get_model_status",
+                return_value=ModelStatus(available=True, enabled=True, reason=""),
+            ),
+            patch("dubpipeline.translation.service.get_model_install_dir", return_value=None),
+        ):
+            service = TranslatorService(cfg)
+
+        self.assertEqual(service.provider_id, "qwen")
+        self.assertEqual(service.model_id, "qwen3_8b")
+        self.assertEqual(service.backend, "llm_qwen")
+
+
+class QwenTranslationProviderTests(unittest.TestCase):
+    def setUp(self):
+        QwenTranslationProvider._QWEN_CACHE.clear()
+
+    def tearDown(self):
+        QwenTranslationProvider._QWEN_CACHE.clear()
+
+    @staticmethod
+    def _context(**overrides) -> TranslationProviderContext:
+        values = {
+            "active_model": ActiveModel(
+                model_id="qwen3_8b",
+                label="Qwen3 (8B)",
+                backend="llm_qwen",
+                model_ref="Qwen/Qwen3-8B",
+            ),
+            "src_lang": "en",
+            "tgt_lang": "ru",
+            "usegpu": False,
+            "batch_size": 1,
+            "max_new_tokens": 128,
+            "qwen_model": "",
+            "qwen_device": "cpu",
+            "qwen_dtype": "auto",
+            "qwen_max_new_tokens": 64,
+            "qwen_prompt": "",
+        }
+        values.update(overrides)
+        return TranslationProviderContext(**values)
+
+    def test_prompt_uses_default_rules_and_current_text(self):
+        provider = QwenTranslationProvider(self._context())
+
+        prompt = provider.build_prompt("Feed it into the node.")
+
+        self.assertIn(DEFAULT_QWEN_TRANSLATION_PROMPT, prompt)
+        self.assertIn("Feed it into the node.", prompt)
+
+    def test_output_cleanup_removes_labels_markdown_and_thinking(self):
+        raw = """
+<think>internal notes</think>
+```text
+Translation: Подайте это в ноду.
+```
+""".strip()
+
+        cleaned = QwenTranslationProvider.clean_translation_output(raw)
+
+        self.assertEqual(cleaned, "Подайте это в ноду.")
+
+    def test_invalid_device_is_rejected_before_loading_model(self):
+        provider = QwenTranslationProvider(self._context(qwen_device="tpu"))
+
+        with self.assertRaisesRegex(TranslationModelUnavailableError, "device 'tpu' is not supported"):
+            provider._device()
+
+    def test_cuda_request_without_cuda_fails_clearly(self):
+        provider = QwenTranslationProvider(self._context(qwen_device="cuda"))
+
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return False
+
+        fake_torch = type("FakeTorch", (), {"cuda": FakeCuda})()
+
+        with patch.dict("sys.modules", {"torch": fake_torch}):
+            with self.assertRaisesRegex(TranslationModelUnavailableError, "requested CUDA but CUDA is not available"):
+                provider._device()
+
+    def test_invalid_dtype_is_rejected(self):
+        provider = QwenTranslationProvider(self._context(qwen_dtype="int4"))
+        fake_torch = type(
+            "FakeTorch",
+            (),
+            {"float16": object(), "bfloat16": object(), "float32": object()},
+        )()
+
+        with self.assertRaisesRegex(TranslationModelUnavailableError, "dtype 'int4' is not supported"):
+            provider._torch_dtype(fake_torch, "cpu")
+
+    def test_model_is_loaded_once_for_multiple_translation_calls(self):
+        provider = QwenTranslationProvider(self._context())
+        load_count = {"tokenizer": 0, "model": 0}
+
+        class FakeTensor:
+            shape = (1, 3)
+
+            def to(self, _device):
+                return self
+
+        class FakeOutput:
+            def __getitem__(self, _item):
+                return self
+
+        class FakeTokenizer:
+            pad_token_id = None
+            eos_token_id = 0
+
+            @classmethod
+            def from_pretrained(cls, *_args, **_kwargs):
+                load_count["tokenizer"] += 1
+                return cls()
+
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **_kwargs):
+                self.last_messages = messages
+                return messages[-1]["content"]
+
+            def __call__(self, *_args, **_kwargs):
+                return {"input_ids": FakeTensor()}
+
+            def batch_decode(self, *_args, **_kwargs):
+                return ["Translation: Готовый перевод."]
+
+        class FakeModel:
+            @classmethod
+            def from_pretrained(cls, *_args, **_kwargs):
+                load_count["model"] += 1
+                return cls()
+
+            def eval(self):
+                return self
+
+            def to(self, _device):
+                return self
+
+            def generate(self, **_kwargs):
+                return FakeOutput()
+
+        class FakeInferenceMode:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc):
+                return False
+
+        class FakeCuda:
+            @staticmethod
+            def is_available():
+                return False
+
+            @staticmethod
+            def empty_cache():
+                return None
+
+        fake_torch = type(
+            "FakeTorch",
+            (),
+            {
+                "cuda": FakeCuda,
+                "float16": object(),
+                "bfloat16": object(),
+                "float32": object(),
+                "inference_mode": lambda self=None: FakeInferenceMode(),
+            },
+        )()
+        fake_transformers = type(
+            "FakeTransformers",
+            (),
+            {
+                "AutoTokenizer": FakeTokenizer,
+                "AutoModelForCausalLM": FakeModel,
+            },
+        )()
+
+        with patch.dict("sys.modules", {"torch": fake_torch, "transformers": fake_transformers}):
+            first = provider.translate_texts(["Feed it into the node."])
+            second = provider.translate_texts(["Use the material."])
+
+        self.assertEqual(first, ["Готовый перевод."])
+        self.assertEqual(second, ["Готовый перевод."])
+        self.assertEqual(load_count, {"tokenizer": 1, "model": 1})
+
+    def test_release_removes_cached_model(self):
+        provider = QwenTranslationProvider(self._context())
+        key = ("Qwen/Qwen3-8B", "cpu", "auto")
+        provider._cache_key = key
+        model = type("FakeModel", (), {"to": lambda self, _device: self})()
+        QwenTranslationProvider._QWEN_CACHE[key] = (object(), model)
+
+        provider.release()
+
+        self.assertNotIn(key, QwenTranslationProvider._QWEN_CACHE)
 
 
 class TranslationStepIntegrationTests(unittest.TestCase):
@@ -400,6 +626,72 @@ translation:
         self.assertEqual(cfg.translation.provider, "argos")
         self.assertEqual(cfg.translation.model_id, "argos")
         self.assertEqual(cfg.translation.backend, "argos")
+
+    def test_config_load_accepts_explicit_qwen_provider(self):
+        root = self._case_dir("translation_qwen_provider_config")
+        pipeline_file = root / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: ru
+paths:
+  workdir: .
+  out_dir: out
+  input_video: sample.mp4
+translation:
+  provider: qwen
+  model: Qwen/Qwen3-8B
+  device: cuda
+  dtype: bfloat16
+  max_new_tokens: 512
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "dubpipeline.config.get_model_status",
+            return_value=ModelStatus(available=True, enabled=True, reason=""),
+        ):
+            cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertEqual(cfg.translation.provider, "qwen")
+        self.assertEqual(cfg.translation.model_id, "qwen3_8b")
+        self.assertEqual(cfg.translation.backend, "llm_qwen")
+        self.assertEqual(cfg.translation.model_ref, "Qwen/Qwen3-8B")
+        self.assertEqual(cfg.translation.device, "cuda")
+        self.assertEqual(cfg.translation.dtype, "bfloat16")
+        self.assertEqual(cfg.translation.max_new_tokens, 512)
+
+    def test_config_qwen_provider_overrides_previous_non_qwen_model_id(self):
+        root = self._case_dir("translation_qwen_overrides_old_model")
+        pipeline_file = root / "video.pipeline.yaml"
+        pipeline_file.write_text(
+            """
+project_name: sample
+languages:
+  src: en
+  tgt: ru
+paths:
+  workdir: .
+  out_dir: out
+  input_video: sample.mp4
+translation:
+  provider: qwen
+  model_id: opus_mt
+""".strip(),
+            encoding="utf-8",
+        )
+
+        with patch(
+            "dubpipeline.config.get_model_status",
+            return_value=ModelStatus(available=True, enabled=True, reason=""),
+        ):
+            cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
+
+        self.assertEqual(cfg.translation.model_id, "qwen3_8b")
+        self.assertEqual(cfg.translation.backend, "llm_qwen")
 
 
 if __name__ == "__main__":
