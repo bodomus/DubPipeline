@@ -2,83 +2,137 @@
 
 ## Ticket
 
-DUB-79 - Local Qwen Translation Provider.
+DUB-79 - Local Qwen Translation Provider (final quality pass).
 
 Roadmap document number: DUB-76.
 
-Final verdict: READY FOR REVIEW.
+## Scope Completed
 
-## Review Fixes Completed
+- Kept the existing local-only `Qwen/Qwen3-8B-FP8` provider, RTX 4080-safe quantization, cache identity, model lifecycle, output validation, and offline installer behavior.
+- Added a fixed 25-line technical EN-to-RU quality dataset and a reproducible local GPU benchmark runner.
+- Reworked the default system prompt around general technical interpretation, data/control direction, Russian dubbing style, protected tokens, and translation-only output. No phrase-specific replacement table or output post-processing was added.
+- Compared Qwen-recommended non-thinking sampling, conservative sampling, and deterministic decoding on the same dataset.
+- Selected and versioned `qwen3-nothink-conservative-translation-v3`.
+- Preserved the prompt hash and generation profile in Qwen `cache_scope`, so both changes invalidate stale Qwen cache entries.
 
-- Switched the production Qwen default to the official local `Qwen/Qwen3-8B-FP8` snapshot for `qwen3_8b`.
-- Added `translation.quantization` with `auto` default and explicit `fp8`, `none`, `awq`, `bnb_4bit`, `bnb_8bit` validation paths.
-- Added explicit runtime dependencies required by Qwen3 FP8 Transformers loading: `transformers>=4.51.0`, `accelerate>=0.26.0`, and Triton with Windows/Linux markers.
-- Added Qwen cache identity isolation by provider, model id/ref, language pair, quantization, dtype, prompt hash, generation profile, and context version.
-- Added folder-run lifecycle support: single-file runs still release after translate; folder runs can keep the CPU-side Qwen cache between files and offload from CUDA before TTS.
-- Added final shared Qwen cache cleanup after multi-file CLI runs.
-- Added Qwen output validation for empty output, prompt echo, assistant labels, markdown fences, and `<think>` markers.
-- Strengthened Qwen prompt rules for placeholders, technical tokens, numbers, units, paths, timestamps, versions, and uppercase abbreviations.
-- Added logging for model load, cache hits, offload, and release without logging full prompts.
-- Added tests for cache identity, quantization resolution, config parsing, output validation, provider lifecycle, and installer/model behavior.
+## Translation Quality Pass
 
-## Runtime Decisions
+### Dataset
 
-- `translation.quantization=auto` resolves to FP8 on CUDA and to non-quantized model refs on CPU.
-- `qwen3_8b` installs/checks `Qwen/Qwen3-8B-FP8` through the existing HF snapshot installer.
-- Full-precision `Qwen/Qwen3-8B` remains possible through explicit `translation.quantization=none` plus `translation.model`, but it is not the safe default for RTX 4080 16 GB.
-- AWQ/bitsandbytes modes are recognized but not defaulted. AutoAWQ can downgrade Transformers below the Qwen3 minimum, so it was not made mandatory.
-- Triton cache is redirected to the DubPipeline models root when `TRITON_CACHE_DIR` is not already set, avoiding fragile writes to the user home `.triton` directory.
+The source dataset is [qwen_translation_quality_dataset.json](benchmarks/qwen_translation_quality_dataset.json). It contains 25 isolated segments covering Unreal Engine/material nodes, programming, callbacks/threads, numbers, units, versions, timestamps, paths, API/GPU/VRAM/TTS abbreviations, and more difficult shader/widget instructions.
 
-## Real GPU Smoke
+### Compared Profiles
 
-Command shape: real `TranslatorService`, local-only Qwen provider, 5 EN->RU phrases, CUDA, `translation.quantization=fp8`, explicit `_load_qwen()` before generation to separate load/generation timing.
+Research basis: the official [Qwen Transformers guide](https://qwen.readthedocs.io/en/stable/inference/transformers.html) and [Qwen3-8B model card](https://huggingface.co/Qwen/Qwen3-8B) document `enable_thinking=False` and recommend `temperature=0.7`, `top_p=0.8`, `top_k=20` for non-thinking inference. Conservative and deterministic candidates were evaluated empirically for this translation workload rather than treated as undocumented defaults.
 
-Environment:
+| Candidate | Settings | 25-line time | Repeatability result |
+| --- | --- | ---: | --- |
+| A: Qwen recommended | `do_sample=true`, `temperature=0.7`, `top_p=0.8`, `top_k=20` | 35.79 s | Meaning improved, but wording varied on `Feed` across 5 runs. |
+| B: conservative | `do_sample=true`, `temperature=0.3`, `top_p=0.8`, `top_k=20` | 34.68 s | All three difficult phrases were identical in 5/5 runs. |
+| C: deterministic | `do_sample=false`, greedy | 35.77 s | Stable, but no quality gain over B and not the documented non-thinking default. |
 
-- GPU: NVIDIA GeForce RTX 4080
-- GPU memory: 16375.5 MiB total
-- CUDA capability: 8.9
-- Driver: 610.47
-- Python: 3.12.10
-- Torch: 2.6.0+cu124
-- Torch CUDA: 12.4
-- Transformers: 4.57.3
-- Accelerate: 1.14.0
-- Triton: 3.2.0 via `triton-windows 3.2.0.post21`
-- Model: `Qwen/Qwen3-8B-FP8`
-- Local path: `C:\Users\bodom\AppData\Local\DubPipeline\models\hf\Qwen\Qwen3-8B-FP8`
+The full A/B/C source and output matrix is saved in [qwen_translation_quality_results.json](benchmarks/qwen_translation_quality_results.json).
 
-Measured result:
+### Selected Profile
 
-- Load time: 8.624 s
-- Generation time for 5 phrases: 7.551 s
-- VRAM before load: 15074.0 MiB free / 16375.5 MiB total
-- VRAM after load: 6072.0 MiB free
-- VRAM after generation: 5942.0 MiB free
-- VRAM after release: 14996.0 MiB free
-- Torch peak allocated: 9053.5 MiB
-- Torch peak reserved: 9074.0 MiB
+`qwen3-nothink-conservative-translation-v3` uses conservative sampling:
 
-Smoke outputs:
+```text
+do_sample=true
+temperature=0.3
+top_p=0.8
+top_k=20
+num_beams=1
+enable_thinking=false
+```
 
-- `Feed it into the node.` -> `Покорми его через узел.`
-- `Set the value to 42.5 dB.` -> `Установите значение в 42,5 дБ.`
-- `Use version 1.2.3 of the API.` -> `Используйте версию 1.2.3 API.`
-- `The file is saved as C:/Temp/output.wav.` -> `Файл сохранен как C:/Temp/output.wav.`
-- `Wait 00:01:23 before starting TTS.` -> `Подожди 00:01:23 перед началом TTS.`
+It won because it corrected the technical meaning, matched or slightly beat the other profiles on dataset time, and was stable in the required uncached repeatability test. Deterministic decoding did not improve the wider translations enough to replace Qwen's documented non-thinking sampling approach.
 
-Smoke verdict: runtime and VRAM are acceptable for RTX 4080 16 GB. Quality is good enough for provider smoke, but phrase-level style tuning remains a normal DUB-80/DUB-81 context/prompt task.
+### Difficult Examples
+
+| Source | Final Russian |
+| --- | --- |
+| `Feed it into the node.` | `Подайте его в узел.` |
+| `Drive this value with the parameter.` | `Управляйте этим значением параметром.` |
+| `Pass the result into the Lerp node.` | `Передай результат в узел Lerp.` |
+| `Connect this output to the material input.` | `Подключите этот выход к входу материала.` |
+
+The food-related mistranslation is gone. Data/control direction is preserved. A few isolated commands still vary between polite plural and natural singular imperative, but they remain concise, understandable, and semantically correct; no context-aware rewriting from DUB-80 was introduced.
+
+### Final Production Outputs
+
+| EN source | RU result |
+| --- | --- |
+| Feed it into the node. | Подайте его в узел. |
+| Connect this output to the material input. | Подключите этот выход к входу материала. |
+| Plug the texture into the normal input. | Подключите текстуру к входу нормали. |
+| Drive this value with the parameter. | Управляйте этим значением параметром. |
+| Pass the result into the Lerp node. | Передай результат в узел Lerp. |
+| Route the output through this function. | Направьте выход через эту функцию. |
+| Sample the texture using these UV coordinates. | Сэмплируйте текстуру с использованием этих координат UV. |
+| Multiply the normal by this value. | Умножьте нормаль на это значение. |
+| Clamp the result between zero and one. | Ограничь результат между нулём и единицей. |
+| Blend the two materials together. | Смешайте два материала вместе. |
+| Pass the value to the function. | Передайте значение функции. |
+| The function returns a boolean value. | Функция возвращает значение типа булево. |
+| Store the result in the variable. | Сохраните результат в переменную. |
+| Call the method from the main thread. | Вызовите метод из основного потока. |
+| The API returns a JSON object. | API возвращает объект в формате JSON. |
+| The callback is invoked when the request completes. | Вы получаете вызов обратного вызова при завершении запроса. |
+| Set the gain to -12 dB. | Установите коэффициент усиления на -12 дБ. |
+| Wait 00:01:23 before starting TTS. | Подождите 00:01:23 перед началом TTS. |
+| Use version 1.2.3 of the API. | Используйте версию 1.2.3 API. |
+| The file is saved as C:/Temp/output.wav. | Файл сохранён как C:/Temp/output.wav. |
+| The GPU has 16 GB of VRAM. | Графический процессор имеет 16 ГБ видеопамяти. |
+| Expose the scalar parameter so the material instance can override it. | Доступ к скалярному параметру должен быть предоставлен, чтобы материал мог его переопределить. |
+| Normalize the vector before passing it to the shader. | Нормализуйте вектор перед передачей его в шейдер. |
+| Bind the event before starting the asynchronous task. | Привяжите событие до запуска асинхронной задачи. |
+| Read the return value on the game thread and update the widget. | Прочтите возвращаемое значение на игровом потоке и обновите виджет. |
+
+The final selected-profile artifact, including all outputs and repeatability runs, is [qwen_translation_quality_final_results.json](benchmarks/qwen_translation_quality_final_results.json).
+
+### Repeatability
+
+Without SQLite cache, 5/5 runs were identical for each required phrase:
+
+- `Feed it into the node.` -> `Подайте его в узел.`
+- `Drive this value with the parameter.` -> `Управляйте этим значением параметром.`
+- `Pass the result into the Lerp node.` -> `Передай результат в узел Lerp.`
+
+### Performance
+
+Final production-profile run:
+
+- GPU: NVIDIA GeForce RTX 4080, 16375.5 MiB total.
+- Model: `Qwen/Qwen3-8B-FP8`, local-only, FP8, dtype auto.
+- Python 3.12.10, torch 2.6.0+cu124, CUDA 12.4, Transformers 4.57.3.
+- Model load: 6.57 s.
+- 25-line dataset: 35.34 s.
+- Peak allocated VRAM: 9223.7 MiB.
+- Peak reserved VRAM: 9260.0 MiB.
+- CUDA OOM: none.
+- Model release: completed.
+
+On the same final prompt and 25-line dataset, conservative sampling took 34.68 s versus 35.79 s for the previous DUB-79 sampling settings. The difference is small enough to treat as neutral; profile selection was based on meaning and repeatability. The final selected-only run used 9223.7 MiB peak allocated VRAM and stayed comfortably inside 16 GB.
 
 ## Validation
 
-- `python -m pytest tests\test_translation_models.py tests\test_model_installer.py` -> 43 passed, 2 warnings.
-- `python -m dubpipeline.cli --help` -> passed.
-- Real model install: `ModelInstaller().install("qwen3_8b", src_lang="en", tgt_lang="ru")` -> installed `Qwen/Qwen3-8B-FP8`.
-- Real GPU smoke: passed with the VRAM numbers above.
+- Real Qwen3-8B-FP8 GPU A/B/C comparison: passed.
+- Final production-profile GPU run: passed, no OOM.
+- Focused translation/token/model suite: `61 passed`, 3 dependency warnings, 7 subtests passed.
+- Main `tests/` suite: `146 passed`, 2 unrelated failures, 3 dependency warnings, 9 subtests passed.
+- Unrelated failures: `test_external_voice_skips_extract_audio_step` (existing extract-audio/external-voice behavior) and `test_coqui_provider_without_package_has_clear_error` (environment has Coqui, so the test reaches missing segments instead of its expected missing-package error).
+- Repository-wide `pytest`: collection is blocked by legacy `tools/test_whisperx_basic.py`, which executes WhisperX at import and sees a test stub without `load_model`.
+- CLI `python -m dubpipeline.cli --help`: passed.
+- Prompt/profile cache invalidation, thinking disablement, generation kwargs, and output validation: covered without loading Qwen in unit tests.
+- TechnicalTokenProtector numbers/units/versions/paths/timestamps and Argos/NLLB/OPUS regressions: passed in focused/main suites.
 
-## Notes and Risks
+## Risks and Boundaries
 
-- Initial smoke attempts exposed missing runtime dependencies in the local venv: `accelerate`, Triton, and torch version mismatch. The venv was updated to the project-pinned torch 2.6.0+cu124 and the new requirements now document the dependency set.
-- The provider still uses Transformers `torch_dtype`; Transformers logs that this is deprecated in favor of `dtype`. This is warning-only and should be cleaned in a future dependency-maintenance pass.
-- Qwen output remains probabilistic because Qwen3 documentation recommends sampling for non-thinking mode. Cache identity includes the prompt/generation profile so prompt changes invalidate stale translations.
-- No merge to `master` was done.
+- Qwen3-8B remains a probabilistic 8B model. Conservative sampling was stable on the required repeated phrases, but arbitrary future segments can still vary before SQLite cache records the first result.
+- The provider translates isolated segments only. Neighboring context, segment merging, and timing changes remain intentionally reserved for DUB-80.
+- Transformers still emits the existing `torch_dtype` deprecation warning during FP8 load; it does not affect this ticket's output or measurements.
+- Working-tree note: the tracked deletions under `tests/.tmp_runtime` and untracked `tests/TXT/1.txt` were already present before this pass and were not modified. Additional untracked `tests/.tmp_runtime` cases were generated by validation and are not production changes.
+- No PR or merge to `master` was performed.
+
+READY FOR REVIEW

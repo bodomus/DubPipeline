@@ -57,3 +57,16 @@ Roadmap document number: DUB-76.
 - Translation runtime: provider registry, Qwen provider, runtime resolution.
 - Model catalog/installer: supported Qwen3 HF snapshot.
 - Tests/docs: provider registration, config parsing, prompt/output cleanup, lifecycle with fakes, CLI parsing.
+
+## Final Translation Quality Pass
+
+- Workflow level remains Level 2 because prompt and generation behavior affect cached production output and require a real GPU comparison.
+- The current production profile is Qwen3 non-thinking sampling with `temperature=0.7`, `top_p=0.8`, and `top_k=20`.
+- Official Qwen3 guidance recommends those sampling settings for non-thinking mode. Its explicit greedy-decoding warning is attached to thinking mode, so the ticket's deterministic non-thinking candidate still had to be measured rather than rejected from documentation alone.
+- The observed failure (`Feed it into the node.` translated with a food-related meaning) is a semantic prompt/inference-quality issue, not a token-protection or output-validation failure.
+- The smallest coherent change is to add general technical-context guidance, compare three explicit profiles on one fixed isolated-segment dataset, and version the selected prompt/profile through the existing Qwen cache scope.
+- DUB-80 context work is explicitly out of scope: no neighboring segments, timing changes, or segment merging will be introduced.
+- A real local `Qwen/Qwen3-8B-FP8` run on RTX 4080 is required for selection, repeatability, VRAM, and performance evidence.
+- The fixed 25-line GPU comparison showed that English-only prompt guidance did not reliably preserve data/control direction. Russian target-language instructions corrected the semantic failures without phrase-specific replacements.
+- Standard sampling (`0.7/0.8/20`) varied on the required difficult phrases. Conservative sampling (`0.3/0.8/20`) produced identical outputs in all 5 repeats for each required phrase and retained better natural phrasing than greedy decoding on the wider dataset.
+- Selected profile: `qwen3-nothink-conservative-translation-v3`.

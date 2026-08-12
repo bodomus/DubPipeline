@@ -25,6 +25,8 @@ from dubpipeline.translation.providers import (
     DEFAULT_QWEN_TRANSLATION_PROMPT,
     HfSeq2SeqTranslationProvider,
     QWEN_FP8_MODEL_REF,
+    QWEN_GENERATION_CANDIDATES,
+    QWEN_GENERATION_PROFILE,
     QwenTranslationProvider,
     TranslationProviderContext,
     create_translation_provider,
@@ -359,6 +361,7 @@ class TranslationPairStatusTests(unittest.TestCase):
         self.assertIn("provider=qwen", default_scope)
         self.assertIn(f"model_ref={QWEN_FP8_MODEL_REF}", default_scope)
         self.assertIn("prompt_sha256=", default_scope)
+        self.assertIn(f"generation={QWEN_GENERATION_PROFILE}", default_scope)
         self.assertNotEqual(default_scope, custom_scope)
         self.assertNotEqual(default_scope, other_model_scope)
 
@@ -401,6 +404,22 @@ class QwenTranslationProviderTests(unittest.TestCase):
 
         self.assertIn(DEFAULT_QWEN_TRANSLATION_PROMPT, prompt)
         self.assertIn("Feed it into the node.", prompt)
+        self.assertIn("потоке данных", prompt)
+        self.assertIn("feed, drive, pass, route, plug, connect и sample", prompt)
+        self.assertIn("Не меняй местами то, что управляет", prompt)
+
+    def test_selected_generation_profile_is_conservative_sampling(self):
+        self.assertEqual(QWEN_GENERATION_PROFILE, "qwen3-nothink-conservative-translation-v3")
+        self.assertEqual(
+            QWEN_GENERATION_CANDIDATES[QWEN_GENERATION_PROFILE].generate_kwargs(),
+            {
+                "do_sample": True,
+                "num_beams": 1,
+                "temperature": 0.3,
+                "top_p": 0.8,
+                "top_k": 20,
+            },
+        )
 
     def test_output_cleanup_removes_labels_markdown_and_thinking(self):
         raw = """
@@ -470,9 +489,22 @@ Translation: Подайте это в ноду.
                 DEFAULT_QWEN_TRANSLATION_PROMPT,
             )
 
+    def test_output_validation_rejects_thinking_fences_and_labels(self):
+        invalid_outputs = (
+            ("<think>analysis</think>Перевод", "Перевод", "think"),
+            ("```text\nПеревод\n```", "```text Перевод ```", "fences"),
+            ("Assistant: Перевод", "Assistant: Перевод", "label"),
+        )
+        for raw, cleaned, message in invalid_outputs:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(TranslationModelError, message):
+                    QwenTranslationProvider.validate_translation_output("Hello", raw, cleaned)
+
     def test_model_is_loaded_once_for_multiple_translation_calls(self):
         provider = QwenTranslationProvider(self._context())
         load_count = {"tokenizer": 0, "model": 0}
+        chat_template_kwargs: list[dict[str, object]] = []
+        generation_kwargs: list[dict[str, object]] = []
 
         class FakeTensor:
             shape = (1, 3)
@@ -495,6 +527,7 @@ Translation: Подайте это в ноду.
 
             def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True, **_kwargs):
                 self.last_messages = messages
+                chat_template_kwargs.append(dict(_kwargs))
                 return messages[-1]["content"]
 
             def __call__(self, *_args, **_kwargs):
@@ -516,6 +549,7 @@ Translation: Подайте это в ноду.
                 return self
 
             def generate(self, **_kwargs):
+                generation_kwargs.append(dict(_kwargs))
                 return FakeOutput()
 
         class FakeInferenceMode:
@@ -561,6 +595,11 @@ Translation: Подайте это в ноду.
         self.assertEqual(first, ["Готовый перевод."])
         self.assertEqual(second, ["Готовый перевод."])
         self.assertEqual(load_count, {"tokenizer": 1, "model": 1})
+        self.assertTrue(chat_template_kwargs)
+        self.assertTrue(all(call.get("enable_thinking") is False for call in chat_template_kwargs))
+        self.assertTrue(generation_kwargs)
+        self.assertTrue(all(call.get("do_sample") is True for call in generation_kwargs))
+        self.assertTrue(all(call.get("temperature") == 0.3 for call in generation_kwargs))
 
     def test_release_removes_cached_model(self):
         provider = QwenTranslationProvider(self._context())

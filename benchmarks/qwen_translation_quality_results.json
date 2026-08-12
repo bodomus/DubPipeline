@@ -1,0 +1,422 @@
+{
+  "environment": {
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10",
+    "torch": "2.6.0+cu124",
+    "transformers": "4.57.3",
+    "cuda": "12.4",
+    "gpu": "NVIDIA GeForce RTX 4080",
+    "model": "Qwen/Qwen3-8B-FP8",
+    "quantization": "fp8",
+    "dtype": "auto",
+    "load_seconds": 6.380276700001559,
+    "vram_total_mib": 16375.5,
+    "vram_free_before_mib": 15074.0,
+    "vram_peak_allocated_mib": 9223.70556640625,
+    "vram_peak_reserved_mib": 9260.0
+  },
+  "profiles": {
+    "qwen3-nothink-sampling-v2": {
+      "settings": {
+        "do_sample": true,
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20
+      },
+      "dataset_seconds": 35.78690839999763,
+      "translations": [
+        {
+          "source": "Feed it into the node.",
+          "translation": "Подайте его в узел."
+        },
+        {
+          "source": "Connect this output to the material input.",
+          "translation": "Подключите этот выход к входу материала."
+        },
+        {
+          "source": "Plug the texture into the normal input.",
+          "translation": "Подключите текстуру к входу нормали."
+        },
+        {
+          "source": "Drive this value with the parameter.",
+          "translation": "Управляйте этим значением параметром."
+        },
+        {
+          "source": "Pass the result into the Lerp node.",
+          "translation": "Передай результат в узел Lerp."
+        },
+        {
+          "source": "Route the output through this function.",
+          "translation": "Направьте выход через эту функцию."
+        },
+        {
+          "source": "Sample the texture using these UV coordinates.",
+          "translation": "Сэмплируйте текстуру с использованием этих координат UV."
+        },
+        {
+          "source": "Multiply the normal by this value.",
+          "translation": "Умножьте нормаль на это значение."
+        },
+        {
+          "source": "Clamp the result between zero and one.",
+          "translation": "Ограничь результат между нулём и единицей."
+        },
+        {
+          "source": "Blend the two materials together.",
+          "translation": "Смешайте два материала вместе."
+        },
+        {
+          "source": "Pass the value to the function.",
+          "translation": "Передайте значение функции."
+        },
+        {
+          "source": "The function returns a boolean value.",
+          "translation": "Функция возвращает значение типа булево."
+        },
+        {
+          "source": "Store the result in the variable.",
+          "translation": "Храните результат в переменной."
+        },
+        {
+          "source": "Call the method from the main thread.",
+          "translation": "Вызовите метод из основного потока."
+        },
+        {
+          "source": "The API returns a JSON object.",
+          "translation": "API возвращает объект в формате JSON."
+        },
+        {
+          "source": "The callback is invoked when the request completes.",
+          "translation": "Вы получаете вызов обратного вызова при завершении запроса."
+        },
+        {
+          "source": "Set the gain to -12 dB.",
+          "translation": "Установите коэффициент усиления на -12 дБ."
+        },
+        {
+          "source": "Wait 00:01:23 before starting TTS.",
+          "translation": "Подождите 00:01:23 перед началом TTS."
+        },
+        {
+          "source": "Use version 1.2.3 of the API.",
+          "translation": "Используйте версию 1.2.3 API."
+        },
+        {
+          "source": "The file is saved as C:/Temp/output.wav.",
+          "translation": "Файл сохранён как C:/Temp/output.wav."
+        },
+        {
+          "source": "The GPU has 16 GB of VRAM.",
+          "translation": "Графический процессор имеет 16 гигабайт видеопамяти."
+        },
+        {
+          "source": "Expose the scalar parameter so the material instance can override it.",
+          "translation": "Доступ к скалярному параметру должен быть предоставлен, чтобы материал мог его переопределить."
+        },
+        {
+          "source": "Normalize the vector before passing it to the shader.",
+          "translation": "Нормализуйте вектор перед передачей его в шейдер."
+        },
+        {
+          "source": "Bind the event before starting the asynchronous task.",
+          "translation": "Привяжите событие до запуска асинхронной задачи."
+        },
+        {
+          "source": "Read the return value on the game thread and update the widget.",
+          "translation": "Прочтите возвращаемое значение на игровом потоке и обновите виджет."
+        }
+      ],
+      "repeatability": {
+        "Feed it into the node.": [
+          "Подайте его в узел.",
+          "Посылайте его в узел.",
+          "Предоставьте его узлу.",
+          "Подайте его в узел.",
+          "Подайте его в узел."
+        ],
+        "Drive this value with the parameter.": [
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением с помощью параметра.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром."
+        ],
+        "Pass the result into the Lerp node.": [
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp."
+        ]
+      }
+    },
+    "qwen3-nothink-conservative-v1": {
+      "settings": {
+        "do_sample": true,
+        "temperature": 0.3,
+        "top_p": 0.8,
+        "top_k": 20
+      },
+      "dataset_seconds": 34.683399599998666,
+      "translations": [
+        {
+          "source": "Feed it into the node.",
+          "translation": "Подайте его в узел."
+        },
+        {
+          "source": "Connect this output to the material input.",
+          "translation": "Подключите этот выход к входу материала."
+        },
+        {
+          "source": "Plug the texture into the normal input.",
+          "translation": "Подключите текстуру к входу нормали."
+        },
+        {
+          "source": "Drive this value with the parameter.",
+          "translation": "Управляйте этим значением параметром."
+        },
+        {
+          "source": "Pass the result into the Lerp node.",
+          "translation": "Передай результат в узел Lerp."
+        },
+        {
+          "source": "Route the output through this function.",
+          "translation": "Направьте выход через эту функцию."
+        },
+        {
+          "source": "Sample the texture using these UV coordinates.",
+          "translation": "Сэмплируйте текстуру с использованием этих координат UV."
+        },
+        {
+          "source": "Multiply the normal by this value.",
+          "translation": "Умножьте нормаль на это значение."
+        },
+        {
+          "source": "Clamp the result between zero and one.",
+          "translation": "Ограничь результат между нулём и единицей."
+        },
+        {
+          "source": "Blend the two materials together.",
+          "translation": "Смешайте два материала вместе."
+        },
+        {
+          "source": "Pass the value to the function.",
+          "translation": "Передайте значение функции."
+        },
+        {
+          "source": "The function returns a boolean value.",
+          "translation": "Функция возвращает значение типа булево."
+        },
+        {
+          "source": "Store the result in the variable.",
+          "translation": "Храните результат в переменной."
+        },
+        {
+          "source": "Call the method from the main thread.",
+          "translation": "Вызовите метод из основного потока."
+        },
+        {
+          "source": "The API returns a JSON object.",
+          "translation": "API возвращает объект в формате JSON."
+        },
+        {
+          "source": "The callback is invoked when the request completes.",
+          "translation": "Вы получаете вызов обратного вызова при завершении запроса."
+        },
+        {
+          "source": "Set the gain to -12 dB.",
+          "translation": "Установите коэффициент усиления на -12 дБ."
+        },
+        {
+          "source": "Wait 00:01:23 before starting TTS.",
+          "translation": "Подождите 00:01:23 перед началом TTS."
+        },
+        {
+          "source": "Use version 1.2.3 of the API.",
+          "translation": "Используйте версию 1.2.3 API."
+        },
+        {
+          "source": "The file is saved as C:/Temp/output.wav.",
+          "translation": "Файл сохранен как C:/Temp/output.wav."
+        },
+        {
+          "source": "The GPU has 16 GB of VRAM.",
+          "translation": "Графический процессор имеет 16 гигабайт видеопамяти."
+        },
+        {
+          "source": "Expose the scalar parameter so the material instance can override it.",
+          "translation": "Доступ к скалярному параметру должен быть предоставлен, чтобы материал мог его переопределить."
+        },
+        {
+          "source": "Normalize the vector before passing it to the shader.",
+          "translation": "Нормализуйте вектор перед передачей его в шейдер."
+        },
+        {
+          "source": "Bind the event before starting the asynchronous task.",
+          "translation": "Привяжите событие до запуска асинхронной задачи."
+        },
+        {
+          "source": "Read the return value on the game thread and update the widget.",
+          "translation": "Прочтите возвращаемое значение на игровом потоке и обновите виджет."
+        }
+      ],
+      "repeatability": {
+        "Feed it into the node.": [
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел."
+        ],
+        "Drive this value with the parameter.": [
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром."
+        ],
+        "Pass the result into the Lerp node.": [
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp."
+        ]
+      }
+    },
+    "qwen3-nothink-deterministic-v1": {
+      "settings": {
+        "do_sample": false,
+        "temperature": null,
+        "top_p": null,
+        "top_k": null
+      },
+      "dataset_seconds": 35.77127550000296,
+      "translations": [
+        {
+          "source": "Feed it into the node.",
+          "translation": "Подайте его в узел."
+        },
+        {
+          "source": "Connect this output to the material input.",
+          "translation": "Подключите этот выход к входу материала."
+        },
+        {
+          "source": "Plug the texture into the normal input.",
+          "translation": "Подключите текстуру к входу нормали."
+        },
+        {
+          "source": "Drive this value with the parameter.",
+          "translation": "Управляйте этим значением параметром."
+        },
+        {
+          "source": "Pass the result into the Lerp node.",
+          "translation": "Передай результат в узел Lerp."
+        },
+        {
+          "source": "Route the output through this function.",
+          "translation": "Направьте выход через эту функцию."
+        },
+        {
+          "source": "Sample the texture using these UV coordinates.",
+          "translation": "Сэмплируйте текстуру с использованием этих координат UV."
+        },
+        {
+          "source": "Multiply the normal by this value.",
+          "translation": "Умножьте нормаль на это значение."
+        },
+        {
+          "source": "Clamp the result between zero and one.",
+          "translation": "Ограничь результат между нулём и единицей."
+        },
+        {
+          "source": "Blend the two materials together.",
+          "translation": "Смешайте два материала вместе."
+        },
+        {
+          "source": "Pass the value to the function.",
+          "translation": "Передайте значение функции."
+        },
+        {
+          "source": "The function returns a boolean value.",
+          "translation": "Функция возвращает логическое значение."
+        },
+        {
+          "source": "Store the result in the variable.",
+          "translation": "Храните результат в переменной."
+        },
+        {
+          "source": "Call the method from the main thread.",
+          "translation": "Вызовите метод из основного потока."
+        },
+        {
+          "source": "The API returns a JSON object.",
+          "translation": "API возвращает объект в формате JSON."
+        },
+        {
+          "source": "The callback is invoked when the request completes.",
+          "translation": "Вы получаете вызов обратного вызова при завершении запроса."
+        },
+        {
+          "source": "Set the gain to -12 dB.",
+          "translation": "Установите коэффициент усиления на -12 дБ."
+        },
+        {
+          "source": "Wait 00:01:23 before starting TTS.",
+          "translation": "Подождите 00:01:23 перед началом TTS."
+        },
+        {
+          "source": "Use version 1.2.3 of the API.",
+          "translation": "Используйте версию 1.2.3 API."
+        },
+        {
+          "source": "The file is saved as C:/Temp/output.wav.",
+          "translation": "Файл сохранён как C:/Temp/output.wav."
+        },
+        {
+          "source": "The GPU has 16 GB of VRAM.",
+          "translation": "Графический процессор имеет 16 гигабайт видеопамяти."
+        },
+        {
+          "source": "Expose the scalar parameter so the material instance can override it.",
+          "translation": "Доступ к скалярному параметру должен быть предоставлен, чтобы материал мог его переопределить."
+        },
+        {
+          "source": "Normalize the vector before passing it to the shader.",
+          "translation": "Нормализуйте вектор перед передачей его в шейдер."
+        },
+        {
+          "source": "Bind the event before starting the asynchronous task.",
+          "translation": "Привяжите событие до запуска асинхронной задачи."
+        },
+        {
+          "source": "Read the return value on the game thread and update the widget.",
+          "translation": "Прочтите возвращаемое значение на игровом потоке и обновите виджет."
+        }
+      ],
+      "repeatability": {
+        "Feed it into the node.": [
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел.",
+          "Подайте его в узел."
+        ],
+        "Drive this value with the parameter.": [
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром.",
+          "Управляйте этим значением параметром."
+        ],
+        "Pass the result into the Lerp node.": [
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp.",
+          "Передай результат в узел Lerp."
+        ]
+      }
+    }
+  }
+}

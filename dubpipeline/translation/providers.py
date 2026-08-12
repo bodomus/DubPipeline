@@ -31,17 +31,20 @@ _NLLB_LANG_MAP = {
 }
 
 DEFAULT_QWEN_TRANSLATION_PROMPT = (
-    "Translate English speech into natural Russian.\n"
-    "Rules:\n"
-    "- Preserve the exact meaning.\n"
-    "- Write natural spoken Russian.\n"
-    "- Do not add explanations.\n"
-    "- Do not omit technical information.\n"
-    "- Preserve exact placeholders and technical tokens unchanged.\n"
-    "- Preserve uppercase abbreviations such as API, GPU, VRAM, TTS, XTTS unchanged.\n"
-    "- Preserve numbers, units, versions, paths, timestamps, ids, and code-like terms unchanged unless Russian grammar requires spacing.\n"
-    "- Prefer concise phrasing suitable for voice dubbing.\n"
-    "- Return only the Russian translation, without labels, notes, markdown, or quotes."
+    "Профессионально переведи отдельную реплику англоязычной технической лекции на русский язык для озвучки.\n"
+    "Требования:\n"
+    "- Сохраняй точный смысл, направление передачи данных и роли источника, получателя, управляющего параметра и управляемого значения.\n"
+    "- Интерпретируй термины программирования, компьютерной графики и Unreal Engine в техническом смысле.\n"
+    "- Если речь идёт о потоке данных, узлах, входах, параметрах, функциях, сигналах, текстурах или значениях, воспринимай feed, drive, pass, route, plug, connect и sample как технические операции, а не бытовые действия.\n"
+    "- Для операций с данными используй естественные русские технические глаголы: передать, подать, подключить, направить, управлять, выбрать образец или сэмплировать по смыслу контекста. Не используй лексику еды или электрического питания, если о них прямо не сказано.\n"
+    "- Не меняй местами то, что управляет, и то, чем управляют.\n"
+    "- Обращайся к слушателю только на «вы»: все инструкции переводи вежливым повелительным наклонением во множественном числе; не используй формы обращения на «ты».\n"
+    "- Пиши естественно, кратко и удобно для устной озвучки.\n"
+    "- Не добавляй объяснений и не опускай техническую информацию.\n"
+    "- Сохраняй защищённые placeholders и технические tokens без изменений.\n"
+    "- Сохраняй API, GPU, VRAM, TTS, XTTS и подобные аббревиатуры, где это уместно.\n"
+    "- Сохраняй числа, единицы, версии, пути, timestamps, ids и code-like terms без изменений, кроме пробелов, необходимых русской грамматике.\n"
+    "- Верни только русский перевод без меток, примечаний, markdown и кавычек."
 )
 
 _QWEN_LABEL_PREFIX_RE = re.compile(
@@ -52,15 +55,54 @@ _QWEN_FENCE_RE = re.compile(r"^\s*```(?:\w+)?\s*|\s*```\s*$", re.IGNORECASE)
 _QWEN_THINK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _QWEN_THINK_MARKER_RE = re.compile(r"</?think>", re.IGNORECASE)
 _QWEN_PROMPT_ECHO_MARKERS = (
-    "Translate English speech into natural Russian",
-    "Rules:",
+    "Профессионально переведи отдельную реплику",
+    "Требования:",
     "Text:",
-    "Return only the Russian translation",
+    "Верни только русский перевод",
 )
 QWEN_BASE_MODEL_REF = "Qwen/Qwen3-8B"
 QWEN_FP8_MODEL_REF = "Qwen/Qwen3-8B-FP8"
 QWEN_AWQ_MODEL_REF = "Qwen/Qwen3-8B-AWQ"
-QWEN_GENERATION_PROFILE = "qwen3-nothink-translation-v2"
+
+
+@dataclass(frozen=True)
+class QwenGenerationSettings:
+    do_sample: bool
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+
+    def generate_kwargs(self) -> dict[str, object]:
+        kwargs: dict[str, object] = {
+            "do_sample": self.do_sample,
+            "num_beams": 1,
+        }
+        if self.do_sample:
+            if self.temperature is not None:
+                kwargs["temperature"] = self.temperature
+            if self.top_p is not None:
+                kwargs["top_p"] = self.top_p
+            if self.top_k is not None:
+                kwargs["top_k"] = self.top_k
+        return kwargs
+
+
+QWEN_GENERATION_CANDIDATES = {
+    "qwen3-nothink-sampling-v2": QwenGenerationSettings(
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.8,
+        top_k=20,
+    ),
+    "qwen3-nothink-conservative-translation-v3": QwenGenerationSettings(
+        do_sample=True,
+        temperature=0.3,
+        top_p=0.8,
+        top_k=20,
+    ),
+    "qwen3-nothink-deterministic-v1": QwenGenerationSettings(do_sample=False),
+}
+QWEN_GENERATION_PROFILE = "qwen3-nothink-conservative-translation-v3"
 QWEN_QUANTIZATION_VALUES = ("auto", "fp8", "none", "awq", "bnb_4bit", "bnb_8bit")
 
 
@@ -788,6 +830,8 @@ class QwenTranslationProvider(BaseTranslationProvider):
         tokenizer: object,
         model: object,
         device: str,
+        *,
+        settings: QwenGenerationSettings | None = None,
     ) -> str:
         import torch
 
@@ -807,16 +851,13 @@ class QwenTranslationProvider(BaseTranslationProvider):
             pad_token_id = getattr(tokenizer, "eos_token_id", None)
 
         max_new_tokens = int(self.context.qwen_max_new_tokens or self.context.max_new_tokens or 512)
+        generation_settings = settings or QWEN_GENERATION_CANDIDATES[QWEN_GENERATION_PROFILE]
         with torch.inference_mode():
             out_ids = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.8,
-                top_k=20,
-                num_beams=1,
                 pad_token_id=pad_token_id,
+                **generation_settings.generate_kwargs(),
             )
 
         try:
