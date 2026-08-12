@@ -35,7 +35,7 @@ Roadmap document number: DUB-76.
 
 - `translation.provider: qwen` and `--translation-provider qwen` select a local Qwen provider.
 - Default behavior remains unchanged when provider is omitted or `auto`.
-- Initial supported Qwen model is `Qwen/Qwen3-8B`, with configurable model reference.
+- Initial supported Qwen model is `Qwen/Qwen3-8B-FP8` for CUDA/`quantization=auto`, with configurable model reference and `quantization=none` escape hatch for explicit full-precision models.
 - Qwen load is local-only during translation.
 - Model/tokenizer are loaded once per process/cache key and reused across translation calls.
 - Missing local model produces a clear actionable error.
@@ -46,7 +46,8 @@ Roadmap document number: DUB-76.
 - Use Hugging Face Transformers for Qwen because `torch`, `transformers`, and `huggingface_hub` are already available in the environment and the repository already has HF snapshot storage/install patterns.
 - Do not use llama.cpp/GGUF in this ticket because no such runtime lifecycle exists in the repo today.
 - Add `qwen3_8b` as a supported HF snapshot model in the catalog and route backend `llm_qwen` to provider `qwen`.
-- Add provider-specific config under `translation`: `model`, `device`, `dtype`, `max_new_tokens`, and optional `prompt`.
+- Add provider-specific config under `translation`: `model`, `device`, `dtype`, `quantization`, `max_new_tokens`, optional `prompt`, and folder-run lifecycle flags.
+- Use official Qwen FP8 on Windows with `accelerate` plus `triton-windows`; regular `triton` has no Windows wheel in this environment.
 - Keep shared legacy `translate.max_new_tokens` as fallback when provider-specific max tokens are not set.
 
 ## Affected Surfaces
@@ -56,4 +57,3 @@ Roadmap document number: DUB-76.
 - Translation runtime: provider registry, Qwen provider, runtime resolution.
 - Model catalog/installer: supported Qwen3 HF snapshot.
 - Tests/docs: provider registration, config parsing, prompt/output cleanup, lifecycle with fakes, CLI parsing.
-

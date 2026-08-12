@@ -62,8 +62,11 @@ translation:
   model: ''
   device: auto
   dtype: auto
+  quantization: auto
   max_new_tokens: 0
   prompt: ''
+  keep_loaded_between_files: true
+  offload_after_translate: true
   model_id: opus_mt
   backend: opus_mt
   model_ref: Helsinki-NLP/opus-mt-en-de

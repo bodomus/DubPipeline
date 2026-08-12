@@ -19,14 +19,17 @@ from dubpipeline.models.catalog import (
     is_unsupported_pair_reason,
     list_model_specs,
 )
-from dubpipeline.translation.service import ActiveModel, TranslationModelUnavailableError, TranslatorService
+from dubpipeline.translation.service import ActiveModel, TranslationModelError, TranslationModelUnavailableError, TranslatorService
 from dubpipeline.translation.providers import (
     ArgosTranslationProvider,
     DEFAULT_QWEN_TRANSLATION_PROMPT,
     HfSeq2SeqTranslationProvider,
+    QWEN_FP8_MODEL_REF,
     QwenTranslationProvider,
     TranslationProviderContext,
     create_translation_provider,
+    resolve_qwen_model_ref,
+    resolve_qwen_quantization,
     resolve_translation_provider_id,
 )
 from dubpipeline.steps import step_translate
@@ -263,9 +266,9 @@ class TranslationPairStatusTests(unittest.TestCase):
         context = TranslationProviderContext(
             active_model=ActiveModel(
                 model_id="qwen3_8b",
-                label="Qwen3 (8B)",
+                label="Qwen3 (8B FP8)",
                 backend="llm_qwen",
-                model_ref="Qwen/Qwen3-8B",
+                model_ref=QWEN_FP8_MODEL_REF,
             ),
             src_lang="en",
             tgt_lang="ru",
@@ -327,6 +330,37 @@ class TranslationPairStatusTests(unittest.TestCase):
         self.assertEqual(service.provider_id, "qwen")
         self.assertEqual(service.model_id, "qwen3_8b")
         self.assertEqual(service.backend, "llm_qwen")
+        self.assertEqual(service._active.model_ref, QWEN_FP8_MODEL_REF)
+
+    def test_qwen_cache_scope_includes_prompt_and_model_identity(self):
+        def make_service(prompt: str, model_ref: str = QWEN_FP8_MODEL_REF) -> TranslatorService:
+            cfg = PipelineConfig(project_name="sample", project_dir=Path("."))
+            cfg.languages.src = "en"
+            cfg.languages.tgt = "ru"
+            cfg.translation.provider = "qwen"
+            cfg.translation.prompt = prompt
+            cfg.translation.quantization = "fp8"
+
+            service = TranslatorService.__new__(TranslatorService)
+            service._cfg = cfg
+            service._provider_id = "qwen"
+            service._active = ActiveModel(
+                model_id="qwen3_8b",
+                label="Qwen3 (8B FP8)",
+                backend="llm_qwen",
+                model_ref=model_ref,
+            )
+            return service
+
+        default_scope = make_service("").cache_scope
+        custom_scope = make_service("Translate only as subtitles.").cache_scope
+        other_model_scope = make_service("", "Qwen/Qwen3-8B-AWQ").cache_scope
+
+        self.assertIn("provider=qwen", default_scope)
+        self.assertIn(f"model_ref={QWEN_FP8_MODEL_REF}", default_scope)
+        self.assertIn("prompt_sha256=", default_scope)
+        self.assertNotEqual(default_scope, custom_scope)
+        self.assertNotEqual(default_scope, other_model_scope)
 
 
 class QwenTranslationProviderTests(unittest.TestCase):
@@ -353,6 +387,7 @@ class QwenTranslationProviderTests(unittest.TestCase):
             "qwen_model": "",
             "qwen_device": "cpu",
             "qwen_dtype": "auto",
+            "qwen_quantization": "auto",
             "qwen_max_new_tokens": 64,
             "qwen_prompt": "",
         }
@@ -409,6 +444,31 @@ Translation: Подайте это в ноду.
 
         with self.assertRaisesRegex(TranslationModelUnavailableError, "dtype 'int4' is not supported"):
             provider._torch_dtype(fake_torch, "cpu")
+
+    def test_qwen_quantization_auto_selects_fp8_for_cuda_and_none_for_cpu(self):
+        self.assertEqual(resolve_qwen_quantization("auto", device="cuda", usegpu=True), "fp8")
+        self.assertEqual(resolve_qwen_quantization("auto", device="cpu", usegpu=True), "none")
+        self.assertEqual(resolve_qwen_model_ref(
+            model_ref_override="",
+            catalog_model_ref=QWEN_FP8_MODEL_REF,
+            quantization="auto",
+            device="cuda",
+            usegpu=True,
+        ), QWEN_FP8_MODEL_REF)
+
+    def test_invalid_quantization_is_rejected(self):
+        with self.assertRaisesRegex(TranslationModelUnavailableError, "quantization 'int2' is not supported"):
+            resolve_qwen_quantization("int2", device="cuda", usegpu=True)
+
+    def test_output_validation_rejects_empty_and_prompt_echo(self):
+        with self.assertRaisesRegex(TranslationModelError, "empty"):
+            QwenTranslationProvider.validate_translation_output("Hello", "", "")
+        with self.assertRaisesRegex(TranslationModelError, "echo"):
+            QwenTranslationProvider.validate_translation_output(
+                "Hello",
+                DEFAULT_QWEN_TRANSLATION_PROMPT,
+                DEFAULT_QWEN_TRANSLATION_PROMPT,
+            )
 
     def test_model_is_loaded_once_for_multiple_translation_calls(self):
         provider = QwenTranslationProvider(self._context())
@@ -504,7 +564,7 @@ Translation: Подайте это в ноду.
 
     def test_release_removes_cached_model(self):
         provider = QwenTranslationProvider(self._context())
-        key = ("Qwen/Qwen3-8B", "cpu", "auto")
+        key = ("Qwen/Qwen3-8B", "cpu", "auto", "none")
         provider._cache_key = key
         model = type("FakeModel", (), {"to": lambda self, _device: self})()
         QwenTranslationProvider._QWEN_CACHE[key] = (object(), model)
@@ -512,6 +572,19 @@ Translation: Подайте это в ноду.
         provider.release()
 
         self.assertNotIn(key, QwenTranslationProvider._QWEN_CACHE)
+
+    def test_offload_keeps_cache_entry_for_batch_reuse(self):
+        calls: list[str] = []
+        provider = QwenTranslationProvider(self._context())
+        key = ("Qwen/Qwen3-8B", "cpu", "auto", "none")
+        provider._cache_key = key
+        model = type("FakeModel", (), {"to": lambda self, device: calls.append(device) or self})()
+        QwenTranslationProvider._QWEN_CACHE[key] = (object(), model)
+
+        provider.offload()
+
+        self.assertIn(key, QwenTranslationProvider._QWEN_CACHE)
+        self.assertEqual(calls, ["cpu"])
 
 
 class TranslationStepIntegrationTests(unittest.TestCase):
@@ -564,6 +637,9 @@ class TranslationStepIntegrationTests(unittest.TestCase):
                 return [f"RU:{t}" for t in texts]
 
             def release(self) -> None:
+                self.release_called = True
+
+            def release_after_translate(self, *, batch_file_count: int = 1) -> None:
                 self.release_called = True
 
         fake_translator = FakeTranslator()
@@ -646,6 +722,7 @@ translation:
   device: cuda
   dtype: bfloat16
   max_new_tokens: 512
+  quantization: fp8
 """.strip(),
             encoding="utf-8",
         )
@@ -662,6 +739,7 @@ translation:
         self.assertEqual(cfg.translation.model_ref, "Qwen/Qwen3-8B")
         self.assertEqual(cfg.translation.device, "cuda")
         self.assertEqual(cfg.translation.dtype, "bfloat16")
+        self.assertEqual(cfg.translation.quantization, "fp8")
         self.assertEqual(cfg.translation.max_new_tokens, 512)
 
     def test_config_qwen_provider_overrides_previous_non_qwen_model_id(self):

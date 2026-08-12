@@ -22,6 +22,10 @@ fsspec==2025.9.0
 # --- Для части функционала whisperX ---
 tokenizers>=0.15.0
 huggingface_hub>=0.23.0
+transformers>=4.51.0
+accelerate>=0.26.0
+triton>=3.2,<3.3; platform_system != "Windows"
+triton-windows>=3.2,<3.3; platform_system == "Windows"
 
 argostranslate
 urllib3<2
