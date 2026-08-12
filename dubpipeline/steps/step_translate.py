@@ -40,7 +40,7 @@ def run(cfg: PipelineConfig) -> None:
     finally:
         release = str(cfg.translate.release_vram).strip().lower()
         if release not in {"0", "false", "no", "off"}:
-            translator.release()
+            translator.release_after_translate(batch_file_count=int(getattr(cfg, "batch_file_count", 1) or 1))
 
 
 def _normalize_text(text: str) -> str:

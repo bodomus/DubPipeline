@@ -211,9 +211,43 @@ The CLI exposes the same setting:
 python -m dubpipeline.cli run video.pipeline.yaml --translation-provider argos
 ```
 
-Supported public values are `auto` and `argos`. Future providers should add a provider class,
-register it in the provider factory, add tests that do not download models, and only then expose
-the value in config/CLI.
+Supported public values are `auto`, `argos`, and `qwen`. Future providers should add a provider
+class, register it in the provider factory, add tests that do not download models, and only then
+expose the value in config/CLI.
+
+### Local Qwen Provider
+
+The Qwen provider uses a locally cached Hugging Face snapshot and does not download model files
+during translation. Install/cache the model first through the Models flow.
+
+```yaml
+translation:
+  provider: qwen
+  model_id: qwen3_8b
+  quantization: auto
+  model: ''
+  device: cuda
+  dtype: auto
+  max_new_tokens: 512
+  keep_loaded_between_files: true
+  offload_after_translate: true
+```
+
+CLI smoke example:
+
+```powershell
+python -m dubpipeline.cli run video.pipeline.yaml --translation-provider qwen --set translation.device=cuda --set translation.quantization=fp8
+```
+
+`qwen3_8b` resolves to the official `Qwen/Qwen3-8B-FP8` snapshot by default on CUDA. FP8 runtime
+requires current Transformers, Accelerate, and Triton (`triton-windows` on Windows), all declared in
+`requirements.txt`. `translation.quantization=none` can be used with an explicit/full precision
+`translation.model`, but it is not the production-safe default for 16 GB GPUs.
+
+Qwen loads the tokenizer/model once per process cache key and reuses it across segment translation
+calls. For folder runs, DubPipeline can keep the CPU-side model cache between files while offloading
+from CUDA after translation so XTTS does not share VRAM with Qwen. Use `translation.device=cpu` only
+deliberately; `translation.device=cuda` fails clearly when CUDA is unavailable.
 
 ## Target-Aware Outputs
 

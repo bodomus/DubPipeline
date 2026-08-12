@@ -590,13 +590,20 @@ def main() -> None:
     if not files:
         parser.error(f"Не найдено входных файлов для '{cfg.paths.input_video}'")
 
+    cfg.batch_file_count = len(files)
     log_path = Path(cfg.paths.out_dir) / f"{cfg.project_name}.log"
     init_logger(log_path)
 
-    for input_file in files:
-        run_cfg = _build_cfg_for_input(cfg, input_file)
-        Const.bind(run_cfg)
-        run_pipeline(run_cfg, pipeline_path)
+    try:
+        for input_file in files:
+            run_cfg = _build_cfg_for_input(cfg, input_file)
+            Const.bind(run_cfg)
+            run_pipeline(run_cfg, pipeline_path)
+    finally:
+        if len(files) > 1:
+            from dubpipeline.translation.service import TranslatorService
+
+            TranslatorService.release_shared_cache(cfg)
 
 
 if __name__ == "__main__":

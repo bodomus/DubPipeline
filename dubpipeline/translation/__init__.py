@@ -6,7 +6,9 @@ from .service import (
 )
 from .providers import (
     ArgosTranslationProvider,
+    DEFAULT_QWEN_TRANSLATION_PROMPT,
     HfSeq2SeqTranslationProvider,
+    QwenTranslationProvider,
     TranslationProviderContext,
     create_translation_provider,
     resolve_translation_provider_id,
@@ -15,7 +17,9 @@ from .providers import (
 __all__ = [
     "ActiveModel",
     "ArgosTranslationProvider",
+    "DEFAULT_QWEN_TRANSLATION_PROMPT",
     "HfSeq2SeqTranslationProvider",
+    "QwenTranslationProvider",
     "TranslationModelError",
     "TranslationModelUnavailableError",
     "TranslationProviderContext",

@@ -19,7 +19,7 @@ from dubpipeline.models.catalog import (
     resolve_model_spec,
     resolve_default_model_id,
 )
-from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS
+from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS, QWEN_QUANTIZATION_VALUES
 from dubpipeline.utils.logging import info, warn
 
 
@@ -295,6 +295,14 @@ class TranslateConfig:
 @dataclass
 class TranslationConfig:
     provider: str = ""
+    model: str = ""
+    device: str = "auto"
+    dtype: str = "auto"
+    quantization: str = "auto"
+    max_new_tokens: int = 0
+    prompt: str = ""
+    keep_loaded_between_files: bool = True
+    offload_after_translate: bool = True
     backend: str = ""
     model_id: str = ""
     model_ref: str = ""
@@ -402,6 +410,7 @@ class PipelineConfig:
     rebuild: bool = False
     cleanup: bool = False
     keep_temp: bool = False
+    batch_file_count: int = 1
 
     languages: LanguagesConfig = field(default_factory=LanguagesConfig)
     steps: StepsConfig = field(default_factory=StepsConfig)
@@ -445,6 +454,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     "rebuild": False,
     "cleanup": False,
     "keep_temp": False,
+    "batch_file_count": 1,
     "languages": asdict(LanguagesConfig()),
     "steps": asdict(StepsConfig()),
     "paths": {
@@ -566,6 +576,14 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_TRANSLATE_RELEASE_VRAM": "translate.release_vram",
         # Translation model selector (new unified source of truth)
         "DUBPIPELINE_TRANSLATION_BACKEND": "translation.backend",
+        "DUBPIPELINE_TRANSLATION_MODEL": "translation.model",
+        "DUBPIPELINE_TRANSLATION_DEVICE": "translation.device",
+        "DUBPIPELINE_TRANSLATION_DTYPE": "translation.dtype",
+        "DUBPIPELINE_TRANSLATION_QUANTIZATION": "translation.quantization",
+        "DUBPIPELINE_TRANSLATION_MAX_NEW_TOKENS": "translation.max_new_tokens",
+        "DUBPIPELINE_TRANSLATION_PROMPT": "translation.prompt",
+        "DUBPIPELINE_TRANSLATION_KEEP_LOADED_BETWEEN_FILES": "translation.keep_loaded_between_files",
+        "DUBPIPELINE_TRANSLATION_OFFLOAD_AFTER_TRANSLATE": "translation.offload_after_translate",
         "DUBPIPELINE_TRANSLATION_MODEL_ID": "translation.model_id",
         "DUBPIPELINE_TRANSLATION_MODEL_REF": "translation.model_ref",
         "DUBPIPELINE_TRANSLATION_PROVIDER": "translation.provider",
@@ -815,6 +833,18 @@ def load_pipeline_config_ex(
     translation_raw = merged.get("translation") or {}
     translation = TranslationConfig(**translation_raw)
     translation.provider = str(translation.provider or "").strip().lower()
+    translation.model = str(translation.model or "").strip()
+    translation.device = str(translation.device or "auto").strip().lower() or "auto"
+    translation.dtype = str(translation.dtype or "auto").strip().lower() or "auto"
+    translation.quantization = str(translation.quantization or "auto").strip().lower() or "auto"
+    translation.max_new_tokens = int(translation.max_new_tokens or 0)
+    translation.keep_loaded_between_files = bool(translation.keep_loaded_between_files)
+    translation.offload_after_translate = bool(translation.offload_after_translate)
+    if translation.quantization not in QWEN_QUANTIZATION_VALUES:
+        warn(
+            f"[config] Unknown translation.quantization='{translation.quantization}'. "
+            "Runtime will report a Qwen quantization error."
+        )
 
     translate_defaults = TranslateConfig()
     legacy_model_id = None
@@ -828,6 +858,8 @@ def load_pipeline_config_ex(
         )
     if translation.provider == "argos":
         translation.model_id = "argos"
+    if translation.provider == "qwen":
+        translation.model_id = "qwen3_8b"
     if not translation.model_id:
         translation.model_id = legacy_model_id or resolve_default_model_id(languages.src, languages.tgt)
     if translation.provider and translation.provider not in PUBLIC_TRANSLATION_PROVIDERS:
@@ -848,7 +880,7 @@ def load_pipeline_config_ex(
         )
 
     translation.backend = model_spec.backend
-    translation.model_ref = model_spec.model_ref
+    translation.model_ref = translation.model or model_spec.model_ref
 
     # Keep legacy translate.* fields synchronized for backward compatibility.
     translate.backend = legacy_translate_backend_for_model(model_spec)
@@ -898,6 +930,7 @@ def load_pipeline_config_ex(
         rebuild=bool(merged.get("rebuild", False)),
         cleanup=bool(merged.get("cleanup", False)),
         keep_temp=bool(merged.get("keep_temp", False)),
+        batch_file_count=int(merged.get("batch_file_count", 1) or 1),
         languages=languages,
         steps=steps,
         paths=paths_cfg,
@@ -1002,9 +1035,21 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
 
     cfg.setdefault("translation", {})
     cfg["translation"]["provider"] = (cfg["translation"].get("provider") or "")
+    cfg["translation"]["model"] = (cfg["translation"].get("model") or "")
+    cfg["translation"]["device"] = (cfg["translation"].get("device") or "auto")
+    cfg["translation"]["dtype"] = (cfg["translation"].get("dtype") or "auto")
+    cfg["translation"]["quantization"] = (cfg["translation"].get("quantization") or "auto")
+    cfg["translation"]["max_new_tokens"] = int(cfg["translation"].get("max_new_tokens") or 0)
+    cfg["translation"]["prompt"] = (cfg["translation"].get("prompt") or "")
+    cfg["translation"]["keep_loaded_between_files"] = bool(
+        cfg["translation"].get("keep_loaded_between_files", True)
+    )
+    cfg["translation"]["offload_after_translate"] = bool(
+        cfg["translation"].get("offload_after_translate", True)
+    )
     cfg["translation"]["model_id"] = model_spec.id
     cfg["translation"]["backend"] = model_spec.backend
-    cfg["translation"]["model_ref"] = model_spec.model_ref
+    cfg["translation"]["model_ref"] = cfg["translation"]["model"] or model_spec.model_ref
 
     # Keep old keys in sync for compatibility with older scripts/tools.
     cfg.setdefault("translate", {})
