@@ -1,4 +1,9 @@
 import os
+
+from dubpipeline.runtime import configure_pytorch_checkpoint_loading
+
+_PYTORCH_CHECKPOINT_COMPAT = configure_pytorch_checkpoint_loading()
+
 import re
 import shutil
 import subprocess
@@ -50,7 +55,12 @@ from dubpipeline.models.installer import (
 from dubpipeline.steps.step_tts import list_voices, synthesize_preview_text
 from dubpipeline.translation.service import model_not_installed_message
 from dubpipeline.utils.build_info import get_build_info
-from dubpipeline.utils.logging import error
+from dubpipeline.utils.logging import error, info
+
+info(
+    "PyTorch compatibility: "
+    f"TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD={_PYTORCH_CHECKPOINT_COMPAT}"
+)
 
 
 def _preview_worker_target(
