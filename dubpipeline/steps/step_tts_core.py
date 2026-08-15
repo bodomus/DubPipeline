@@ -14,6 +14,10 @@ except Exception:  # pragma: no cover
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.text.technical_tokens import PLACEHOLDER_RE
+from dubpipeline.text.translation_validation import (
+    TranslationValidationError,
+    validate_translation_text,
+)
 from dubpipeline.text.tts_normalizer import normalize_text_for_tts
 from dubpipeline.utils.concat_wavs import concat_wavs
 from dubpipeline.utils.logging import debug, info, step, warn
@@ -168,7 +172,7 @@ def _segment_text(seg: dict) -> str:
     return _norm_text(str(seg.get("text_tgt") or seg.get("text_ru") or seg.get("text") or ""))
 
 
-def _segment_text_for_tts(seg: dict, language: str) -> str:
+def _segment_text_for_tts(seg: dict, language: str, source_lang: str) -> str:
     segment_id = str(seg.get("id", "")).strip() or "unknown"
     text = _segment_text(seg)
     unresolved = PLACEHOLDER_RE.findall(text)
@@ -176,6 +180,18 @@ def _segment_text_for_tts(seg: dict, language: str) -> str:
         unique = ", ".join(sorted(set(unresolved)))
         warn(f"[TTS] Unresolved technical placeholder segment_id={segment_id}: {unique}\n")
         raise RuntimeError(f"Unresolved technical placeholder in TTS segment {segment_id}: {unique}")
+    if text and str(seg.get("text", "") or "").strip():
+        try:
+            validate_translation_text(
+                source_text=str(seg.get("text") or ""),
+                translated_text=text,
+                source_lang=source_lang,
+                target_lang=language,
+                segment_id=segment_id,
+            )
+        except TranslationValidationError as exc:
+            warn(f"[TTS] Invalid translated text segment_id={segment_id}: {exc}\n")
+            raise RuntimeError(f"Invalid translated text in TTS segment {segment_id}: {exc}") from exc
 
     normalized = normalize_text_for_tts(text, language=language)
     if normalized != text:
@@ -197,11 +213,12 @@ def synthesize_segments_to_wavs(
 ) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     default_target_lang = (getattr(getattr(cfg, "languages", None), "tgt", "ru") or "ru").strip().lower() or "ru"
+    source_lang = (getattr(getattr(cfg, "languages", None), "src", "en") or "en").strip().lower() or "en"
     language = (lang or default_target_lang).strip().lower() or default_target_lang
     prepared: list[tuple[int, dict, str, Path]] = []
     planned_paths: list[Path] = []
     for index, seg in enumerate(segments):
-        text = _segment_text_for_tts(seg, language)
+        text = _segment_text_for_tts(seg, language, source_lang)
         if not text:
             continue
         out_wav = out_dir / f"{_segment_stem(seg, index)}.wav"

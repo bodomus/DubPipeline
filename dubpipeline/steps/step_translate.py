@@ -11,8 +11,12 @@ from typing import Dict, List, Tuple
 
 from dubpipeline.config import PipelineConfig
 from dubpipeline.text.technical_tokens import TechnicalTokenError, TechnicalTokenProtector
+from dubpipeline.text.translation_validation import (
+    TranslationValidationError,
+    validate_translation_text,
+)
 from dubpipeline.translation.service import TranslationModelError, TranslatorService
-from dubpipeline.utils.logging import info, step, warn
+from dubpipeline.utils.logging import error, info, step, warn
 
 _WS_RE = re.compile(r"\s+", re.UNICODE)
 
@@ -70,6 +74,31 @@ def _open_cache(db_path: Path) -> sqlite3.Connection:
 def _make_cache_key(scope: str, text: str) -> str:
     payload = f"{scope}|{_normalize_text(text)}".encode("utf-8")
     return hashlib.sha1(payload).hexdigest()
+
+
+def _segment_id(seg: dict, fallback_index: int) -> str:
+    value = str(seg.get("id", "")).strip()
+    return value or str(fallback_index)
+
+
+def _placeholders(tokens: dict[str, str]) -> str:
+    return ",".join(tokens.keys()) if tokens else "none"
+
+
+def _raise_translation_failure(
+    *,
+    segment_id: str,
+    source_lang: str,
+    target_lang: str,
+    reason: str,
+) -> None:
+    message = (
+        "[TRANSLATE] translation_validation_failed "
+        f"segment_id={segment_id} source_lang={source_lang} "
+        f"target_lang={target_lang} reason={reason}"
+    )
+    error(message + "\n")
+    raise TranslationModelError(message)
 
 
 def _cache_get_many(con: sqlite3.Connection, keys: List[str]) -> Dict[str, str]:
@@ -139,6 +168,12 @@ def translate_segments(
         info(f"[INFO] Need translate: {len(misses)} (unique)\n")
         info(f"[CACHE] {cache_path}\n")
 
+        source_lang = (cfg.languages.src or "").strip().lower()
+        target_lang = (cfg.languages.tgt or "").strip().lower()
+        segment_ids_by_key: dict[str, str] = {}
+        for idx, (cache_key, seg) in enumerate(zip(keys, segments)):
+            segment_ids_by_key.setdefault(cache_key, _segment_id(seg, idx))
+
         if misses:
             sent_fallback = _sent_fallback_enabled()
             miss_keys = list(misses.keys())
@@ -147,29 +182,105 @@ def translate_segments(
             miss_texts = [protected_by_key[k].text for k in miss_keys]
             translated_texts = translator.translate_texts(miss_texts, sent_fallback=sent_fallback)
             new_items: list[tuple[str, str]] = []
+            retry_keys: list[str] = []
             for cache_key, translated_text in zip(miss_keys, translated_texts):
                 protected = protected_by_key[cache_key]
+                segment_id = segment_ids_by_key.get(cache_key, cache_key)
                 try:
                     restored_text = protector.restore(translated_text, protected.tokens)
                 except TechnicalTokenError as exc:
                     warn(
-                        "[TRANSLATE] Failed to restore technical tokens "
-                        f"cache_key={cache_key}; using source text fallback: {exc}\n"
+                        "[TRANSLATE] technical_token_restore_failed "
+                        f"segment_id={segment_id} source_lang={source_lang} "
+                        f"target_lang={target_lang} placeholder={_placeholders(protected.tokens)} "
+                        f"attempt=1 action=retry reason={exc}\n"
                     )
-                    cached[cache_key] = misses[cache_key]
+                    retry_keys.append(cache_key)
                     continue
 
+                try:
+                    validate_translation_text(
+                        source_text=misses[cache_key],
+                        translated_text=restored_text,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        segment_id=segment_id,
+                    )
+                except TranslationValidationError as exc:
+                    _raise_translation_failure(
+                        segment_id=segment_id,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        reason=str(exc),
+                    )
                 new_items.append((cache_key, restored_text))
                 cached[cache_key] = restored_text
 
+            if retry_keys:
+                retry_texts = [protected_by_key[k].text for k in retry_keys]
+                retry_translated = translator.translate_texts(retry_texts, sent_fallback=False)
+                for cache_key, translated_text in zip(retry_keys, retry_translated):
+                    protected = protected_by_key[cache_key]
+                    segment_id = segment_ids_by_key.get(cache_key, cache_key)
+                    try:
+                        restored_text = protector.restore(translated_text, protected.tokens)
+                    except TechnicalTokenError as exc:
+                        _raise_translation_failure(
+                            segment_id=segment_id,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            reason=(
+                                "technical_token_restore_failed "
+                                f"placeholder={_placeholders(protected.tokens)} attempt=2 {exc}"
+                            ),
+                        )
+                    try:
+                        validate_translation_text(
+                            source_text=misses[cache_key],
+                            translated_text=restored_text,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            segment_id=segment_id,
+                        )
+                    except TranslationValidationError as exc:
+                        _raise_translation_failure(
+                            segment_id=segment_id,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                            reason=str(exc),
+                        )
+                    info(
+                        "[TRANSLATE] technical_token_restore_recovered "
+                        f"segment_id={segment_id} source_lang={source_lang} "
+                        f"target_lang={target_lang} placeholder={_placeholders(protected.tokens)} "
+                        "attempt=2 action=accept\n"
+                    )
+                    new_items.append((cache_key, restored_text))
+                    cached[cache_key] = restored_text
+
             _cache_put_many(con, new_items)
 
-        target_lang = (cfg.languages.tgt or "").strip().lower()
         translated = []
         for idx, seg in enumerate(segments):
             text = seg.get("text", "") or ""
             cache_key = keys[idx]
             text_tgt = cached.get(cache_key, "") if _normalize_text(text) else ""
+            if _normalize_text(text):
+                try:
+                    validate_translation_text(
+                        source_text=text,
+                        translated_text=text_tgt,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        segment_id=_segment_id(seg, idx),
+                    )
+                except TranslationValidationError as exc:
+                    _raise_translation_failure(
+                        segment_id=_segment_id(seg, idx),
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        reason=str(exc),
+                    )
             seg_out = {"id": idx, **seg, "text_tgt": text_tgt}
             if target_lang == "ru":
                 seg_out["text_ru"] = text_tgt
