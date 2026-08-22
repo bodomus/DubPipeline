@@ -9,7 +9,6 @@ from pathlib import Path
 from dubpipeline.config import PipelineConfig
 from dubpipeline.utils.logging import debug, error, info
 
-
 _FFMPEG_ENV_KEY = "DUBPIPELINE_FFMPEG_BIN"
 _FFPROBE_ENV_KEY = "DUBPIPELINE_FFPROBE_BIN"
 _KEEP_TEMP_ENV_KEY = "DUBPIPELINE_KEEP_TEMP"
@@ -130,7 +129,11 @@ def _language_matches(requested: str, stream_language: str) -> bool:
     stream_n = (stream_language or "").strip().lower()
     if not requested_n or not stream_n:
         return False
-    return stream_n == requested_n or stream_n.startswith(requested_n) or requested_n.startswith(stream_n)
+    return (
+        stream_n == requested_n
+        or stream_n.startswith(requested_n)
+        or requested_n.startswith(stream_n)
+    )
 
 
 def select_original_audio_stream(
@@ -187,7 +190,9 @@ def build_filtergraph(
     original_audio_spec: str,
 ) -> str:
     validate_merge_hq_config(cfg)
-    threshold_linear = max(0.000976563, min(1.0, 10 ** (cfg.ducking.threshold_db / 20.0)))
+    threshold_linear = max(
+        0.000976563, min(1.0, 10 ** (cfg.ducking.threshold_db / 20.0))
+    )
 
     parts: list[str] = [
         f"[{original_audio_spec}]aresample=48000,volume={cfg.original_gain_db:.3f}dB[orig]",
@@ -232,6 +237,7 @@ def build_ffmpeg_command(
     tts_wav: Path,
     output_video: Path,
     filtergraph: str,
+    background_wav: Path | None = None,
     output_container: str | None = None,
 ) -> list[str]:
     cmd = [
@@ -241,29 +247,35 @@ def build_ffmpeg_command(
         str(input_video),
         "-i",
         str(tts_wav),
-        "-filter_complex",
-        filtergraph,
-        "-map",
-        "0:v:0",
-        "-map",
-        "[outa]",
-        "-map",
-        "0:s?",
-        "-map_metadata",
-        "0",
-        "-map_chapters",
-        "0",
-        "-c:v",
-        "copy",
-        "-c:s",
-        "copy",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "48000",
     ]
+    if background_wav is not None:
+        cmd.extend(["-i", str(background_wav)])
+    cmd.extend(
+        [
+            "-filter_complex",
+            filtergraph,
+            "-map",
+            "0:v:0",
+            "-map",
+            "[outa]",
+            "-map",
+            "0:s?",
+            "-map_metadata",
+            "0",
+            "-map_chapters",
+            "0",
+            "-c:v",
+            "copy",
+            "-c:s",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+        ]
+    )
     if output_container in {"mp4", "mov"}:
         cmd.extend(["-movflags", "+faststart"])
     if output_container:
@@ -280,6 +292,7 @@ def merge_hq_ducking(
     work_dir: Path,
     cfg: MergeHQConfig,
     original_audio_stream_selector: str = "auto",
+    background_wav: Path | None = None,
 ) -> Path:
     """Return path to out_video on success. Must use atomic safe-write."""
     validate_merge_hq_config(cfg)
@@ -288,6 +301,8 @@ def merge_hq_ducking(
         raise FileNotFoundError(f"Input video not found: {input_video}")
     if not tts_wav.exists():
         raise FileNotFoundError(f"TTS wav not found: {tts_wav}")
+    if background_wav is not None and not background_wav.exists():
+        raise FileNotFoundError(f"Background wav not found: {background_wav}")
 
     work_dir.mkdir(parents=True, exist_ok=True)
     out_video.parent.mkdir(parents=True, exist_ok=True)
@@ -304,16 +319,19 @@ def merge_hq_ducking(
         f"knee_db={cfg.ducking.knee_db:.2f}"
     )
 
-    streams = probe_audio_streams(input_video)
-    selected = select_original_audio_stream(streams, original_audio_stream_selector)
-    info(
-        "[merge] selected original audio stream: "
-        f"selector={original_audio_stream_selector}, "
-        f"audio_index={selected.audio_index}, stream_index={selected.stream_index}, "
-        f"lang={selected.language or 'n/a'}, codec={selected.codec_name or 'n/a'}"
-    )
-
-    original_spec = f"0:a:{selected.audio_index}"
+    if background_wav is None:
+        streams = probe_audio_streams(input_video)
+        selected = select_original_audio_stream(streams, original_audio_stream_selector)
+        info(
+            "[merge] selected original audio stream: "
+            f"selector={original_audio_stream_selector}, "
+            f"audio_index={selected.audio_index}, stream_index={selected.stream_index}, "
+            f"lang={selected.language or 'n/a'}, codec={selected.codec_name or 'n/a'}"
+        )
+        original_spec = f"0:a:{selected.audio_index}"
+    else:
+        info(f"[merge] selected separated background: {background_wav}")
+        original_spec = "2:a:0"
     filtergraph = build_filtergraph(cfg=cfg, original_audio_spec=original_spec)
     debug(f"[merge] filtergraph: {filtergraph}")
 
@@ -331,6 +349,7 @@ def merge_hq_ducking(
         tts_wav=tts_wav,
         output_video=temp_out,
         filtergraph=filtergraph,
+        background_wav=background_wav,
         output_container=output_container,
     )
 
@@ -361,7 +380,9 @@ def merge_hq_config_from_pipeline(cfg: PipelineConfig) -> tuple[MergeHQConfig, s
     ducking_cfg = getattr(audio_merge_cfg, "ducking", None)
     loudness_cfg = getattr(audio_merge_cfg, "loudness", None)
     if ducking_cfg is None or loudness_cfg is None:
-        raise ValueError("audio_merge.ducking and audio_merge.loudness must be configured")
+        raise ValueError(
+            "audio_merge.ducking and audio_merge.loudness must be configured"
+        )
 
     hq_cfg = MergeHQConfig(
         tts_gain_db=float(getattr(audio_merge_cfg, "tts_gain_db", 0.0)),
@@ -383,7 +404,9 @@ def merge_hq_config_from_pipeline(cfg: PipelineConfig) -> tuple[MergeHQConfig, s
     )
     validate_merge_hq_config(hq_cfg)
 
-    selector = parse_original_track_selector(getattr(audio_merge_cfg, "original_track", "auto"))
+    selector = parse_original_track_selector(
+        getattr(audio_merge_cfg, "original_track", "auto")
+    )
     return hq_cfg, selector
 
 
@@ -395,6 +418,7 @@ def render_hq_mix_audio(
     work_dir: Path,
     cfg: MergeHQConfig,
     original_audio_stream_selector: str = "auto",
+    background_wav: Path | None = None,
 ) -> Path:
     """Render HQ ducked mixdown to an audio file. Returns path to out_audio."""
     validate_merge_hq_config(cfg)
@@ -403,6 +427,8 @@ def render_hq_mix_audio(
         raise FileNotFoundError(f"Input video not found: {input_video}")
     if not tts_wav.exists():
         raise FileNotFoundError(f"TTS wav not found: {tts_wav}")
+    if background_wav is not None and not background_wav.exists():
+        raise FileNotFoundError(f"Background wav not found: {background_wav}")
 
     work_dir.mkdir(parents=True, exist_ok=True)
     out_audio.parent.mkdir(parents=True, exist_ok=True)
@@ -412,16 +438,19 @@ def render_hq_mix_audio(
 
     info("[merge] mode: hq_ducking (mixdown)")
 
-    streams = probe_audio_streams(input_video)
-    selected = select_original_audio_stream(streams, original_audio_stream_selector)
-    info(
-        "[merge] selected original audio stream: "
-        f"selector={original_audio_stream_selector}, "
-        f"audio_index={selected.audio_index}, stream_index={selected.stream_index}, "
-        f"lang={selected.language or 'n/a'}, codec={selected.codec_name or 'n/a'}"
-    )
-
-    original_spec = f"0:a:{selected.audio_index}"
+    if background_wav is None:
+        streams = probe_audio_streams(input_video)
+        selected = select_original_audio_stream(streams, original_audio_stream_selector)
+        info(
+            "[merge] selected original audio stream: "
+            f"selector={original_audio_stream_selector}, "
+            f"audio_index={selected.audio_index}, stream_index={selected.stream_index}, "
+            f"lang={selected.language or 'n/a'}, codec={selected.codec_name or 'n/a'}"
+        )
+        original_spec = f"0:a:{selected.audio_index}"
+    else:
+        info(f"[merge] selected separated background: {background_wav}")
+        original_spec = "2:a:0"
     filtergraph = build_filtergraph(cfg=cfg, original_audio_spec=original_spec)
     debug(f"[merge] filtergraph: {filtergraph}")
 
@@ -441,17 +470,23 @@ def render_hq_mix_audio(
         str(input_video),
         "-i",
         str(tts_wav),
-        "-filter_complex",
-        filtergraph,
-        "-map",
-        "[outa]",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
-        "-ar",
-        "48000",
     ]
+    if background_wav is not None:
+        cmd.extend(["-i", str(background_wav)])
+    cmd.extend(
+        [
+            "-filter_complex",
+            filtergraph,
+            "-map",
+            "[outa]",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
+        ]
+    )
     if output_container in {"mp4", "mov"}:
         cmd.extend(["-movflags", "+faststart"])
     if output_container:

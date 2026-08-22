@@ -141,8 +141,22 @@ audio_merge:
         self.assertIn("48000", cmd)
         self.assertEqual(cmd[-1], "out.mp4.tmp")
 
+    def test_ffmpeg_command_accepts_separated_background_input(self):
+        cmd = build_ffmpeg_command(
+            input_video=Path("in.mp4"),
+            tts_wav=Path("tts.wav"),
+            background_wav=Path("background.wav"),
+            output_video=Path("out.mp4.tmp"),
+            filtergraph="[2:a:0]volume=0dB[orig];[1:a]volume=0dB[tts];[orig][tts]amix=inputs=2:normalize=0[outa]",
+        )
 
-@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe are required")
+        self.assertIn("background.wav", cmd)
+        self.assertLess(cmd.index("background.wav"), cmd.index("-filter_complex"))
+
+
+@unittest.skipUnless(
+    shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe are required"
+)
 class MergeHQIntegrationTests(unittest.TestCase):
     def _run(self, cmd: list[str]) -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -158,7 +172,9 @@ class MergeHQIntegrationTests(unittest.TestCase):
             t = np.arange(n, dtype=np.float64) / sr
 
             rng = np.random.default_rng(42)
-            original = 0.18 * np.sin(2 * math.pi * 220.0 * t) + 0.04 * rng.standard_normal(n)
+            original = 0.18 * np.sin(
+                2 * math.pi * 220.0 * t
+            ) + 0.04 * rng.standard_normal(n)
             original = np.clip(original, -0.95, 0.95).astype(np.float32)
 
             tts = np.zeros(n, dtype=np.float32)
@@ -229,7 +245,9 @@ class MergeHQIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(out, output_video)
             self.assertTrue(output_video.exists())
-            self.assertFalse((output_video.with_name(f"{output_video.name}.tmp")).exists())
+            self.assertFalse(
+                (output_video.with_name(f"{output_video.name}.tmp")).exists()
+            )
 
             self._run(
                 [
@@ -261,9 +279,12 @@ class MergeHQIntegrationTests(unittest.TestCase):
             rms_orig_inactive = _rms(_slice(original, 4.0, 5.0))
             rms_out_inactive = _rms(_slice(out_audio, 4.0, 5.0))
 
-            active_delta_db = 20.0 * math.log10((rms_out_active + 1e-9) / (rms_orig_active + 1e-9))
+            active_delta_db = 20.0 * math.log10(
+                (rms_out_active + 1e-9) / (rms_orig_active + 1e-9)
+            )
             inactive_delta_db = abs(
-                20.0 * math.log10((rms_out_inactive + 1e-9) / (rms_orig_inactive + 1e-9))
+                20.0
+                * math.log10((rms_out_inactive + 1e-9) / (rms_orig_inactive + 1e-9))
             )
 
             self.assertLessEqual(active_delta_db, -6.0)

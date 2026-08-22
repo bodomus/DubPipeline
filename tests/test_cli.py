@@ -16,7 +16,11 @@ from dubpipeline.cli import (
     _validate_run_language_pair,
     build_parser,
 )
-from dubpipeline.config import PipelineConfig, load_pipeline_config_ex, save_pipeline_yaml
+from dubpipeline.config import (
+    PipelineConfig,
+    load_pipeline_config_ex,
+    save_pipeline_yaml,
+)
 
 
 class CliTests(unittest.TestCase):
@@ -64,8 +68,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(patch["asr"], True)
         self.assertEqual(patch["tts"], False)
 
-        listed = _parse_steps_arg("asr,translate,tts,merge", parser)
+        listed = _parse_steps_arg("source_separation,asr,translate,tts,merge", parser)
         self.assertEqual(listed["extract_audio"], False)
+        self.assertEqual(listed["source_separation"], True)
         self.assertEqual(listed["asr"], True)
 
     def test_steps_unknown_is_error(self):
@@ -110,13 +115,17 @@ class CliTests(unittest.TestCase):
 
     def test_translation_provider_argos_adds_cli_override(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "argos"])
+        args = parser.parse_args(
+            ["run", "video.pipeline.yaml", "--translation-provider", "argos"]
+        )
         cli_set = _build_cli_set(args, parser)
         self.assertIn("translation.provider=argos", cli_set)
 
     def test_translation_provider_qwen_adds_cli_override(self):
         parser = build_parser()
-        args = parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "qwen"])
+        args = parser.parse_args(
+            ["run", "video.pipeline.yaml", "--translation-provider", "qwen"]
+        )
         cli_set = _build_cli_set(args, parser)
         self.assertIn("translation.provider=qwen", cli_set)
 
@@ -125,7 +134,9 @@ class CliTests(unittest.TestCase):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             with self.assertRaises(SystemExit):
-                parser.parse_args(["run", "video.pipeline.yaml", "--translation-provider", "xyz"])
+                parser.parse_args(
+                    ["run", "video.pipeline.yaml", "--translation-provider", "xyz"]
+                )
         self.assertIn("invalid choice", stderr.getvalue())
 
     def test_same_language_pair_is_rejected_when_translate_enabled(self):
@@ -161,7 +172,9 @@ class CliTests(unittest.TestCase):
         with redirect_stderr(stderr):
             with self.assertRaises(SystemExit):
                 _validate_run_language_pair(cfg, parser, allow_legacy=False)
-        self.assertIn("cannot be used when the Translate step is enabled", stderr.getvalue())
+        self.assertIn(
+            "cannot be used when the Translate step is enabled", stderr.getvalue()
+        )
 
     def test_auto_source_is_allowed_when_translate_disabled(self):
         parser = build_parser()
@@ -354,10 +367,16 @@ paths:
 
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
 
-        self.assertTrue(str(cfg.paths.segments_tgt_file).endswith("sample.segments.de.json"))
-        self.assertTrue(str(cfg.paths.segments_ru_file).endswith("sample.segments.de.json"))
+        self.assertTrue(
+            str(cfg.paths.segments_tgt_file).endswith("sample.segments.de.json")
+        )
+        self.assertTrue(
+            str(cfg.paths.segments_ru_file).endswith("sample.segments.de.json")
+        )
         self.assertTrue(str(cfg.paths.tts_segments_dir).endswith("tts_de_segments"))
-        self.assertTrue(str(cfg.paths.tts_segments_aligned_dir).endswith("tts_de_segments_aligned"))
+        self.assertTrue(
+            str(cfg.paths.tts_segments_aligned_dir).endswith("tts_de_segments_aligned")
+        )
         self.assertTrue(str(cfg.paths.final_video).endswith("sample.de.muxed.mp4"))
 
     def test_legacy_segments_ru_template_key_maps_to_target_file(self):
@@ -383,7 +402,9 @@ paths:
 
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
 
-        self.assertTrue(str(cfg.paths.segments_tgt_file).endswith("sample.legacy.fr.json"))
+        self.assertTrue(
+            str(cfg.paths.segments_tgt_file).endswith("sample.legacy.fr.json")
+        )
 
     def test_build_cfg_for_input_uses_target_language_artifact_names(self):
         root = self._case_dir("cli_target_artifacts")
@@ -407,7 +428,9 @@ paths:
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
         run_cfg = _build_cfg_for_input(cfg, source)
 
-        self.assertTrue(str(run_cfg.paths.segments_tgt_file).endswith("clip.segments.es.json"))
+        self.assertTrue(
+            str(run_cfg.paths.segments_tgt_file).endswith("clip.segments.es.json")
+        )
         self.assertTrue(str(run_cfg.paths.tts_segments_dir).endswith("tts_es_segments"))
         self.assertTrue(str(run_cfg.paths.final_video).endswith("clip.es.muxed.mp4"))
 

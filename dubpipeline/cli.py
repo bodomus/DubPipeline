@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Callable
 
 from dubpipeline.consts import Const
-from dubpipeline.steps.step_text_input import load_text, normalize_text, save_segments_json, split_to_segments
+from dubpipeline.steps.step_text_input import (
+    load_text,
+    normalize_text,
+    save_segments_json,
+    split_to_segments,
+)
 from dubpipeline.steps.step_tts_core import synthesize_segments_to_wavs
 from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS
 from dubpipeline.utils.concat_wavs import concat_wavs
@@ -30,6 +35,7 @@ from .config import (
 
 STEP_ID_TO_CFG_FIELD = {
     "extract_audio": "extract_audio",
+    "source_separation": "source_separation",
     "asr": "asr_whisperx",
     "translate": "translate",
     "tts": "tts",
@@ -38,6 +44,7 @@ STEP_ID_TO_CFG_FIELD = {
 
 STEP_ID_TO_INTERNAL = {
     "extract_audio": "01_extract_audio",
+    "source_separation": "01b_source_separation",
     "asr": "02_asr_whisperx",
     "translate": "03_translate",
     "tts": "04_tts+align",
@@ -57,13 +64,34 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="Run the video pipeline.")
     run_parser.add_argument("pipeline_file", help="Path to *.pipeline.yaml")
     input_group = run_parser.add_mutually_exclusive_group()
-    input_group.add_argument("--in-file", default=None, metavar="PATH", help="Input video file.")
-    input_group.add_argument("--in-dir", default=None, metavar="PATH", help="Input directory with video files.")
-    run_parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override config value.")
-    run_parser.add_argument("--move-to-dir", default=None, help="Move outputs to the target directory.")
-    run_parser.add_argument("--recursive", action="store_true", help="Recursive scan for --in-dir.")
-    run_parser.add_argument("--glob", default=None, metavar="PATTERN", help="Glob filter for input files.")
-    run_parser.add_argument("--out", default=None, metavar="DIR", help="Override paths.out_dir.")
+    input_group.add_argument(
+        "--in-file", default=None, metavar="PATH", help="Input video file."
+    )
+    input_group.add_argument(
+        "--in-dir",
+        default=None,
+        metavar="PATH",
+        help="Input directory with video files.",
+    )
+    run_parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override config value.",
+    )
+    run_parser.add_argument(
+        "--move-to-dir", default=None, help="Move outputs to the target directory."
+    )
+    run_parser.add_argument(
+        "--recursive", action="store_true", help="Recursive scan for --in-dir."
+    )
+    run_parser.add_argument(
+        "--glob", default=None, metavar="PATTERN", help="Glob filter for input files."
+    )
+    run_parser.add_argument(
+        "--out", default=None, metavar="DIR", help="Override paths.out_dir."
+    )
     run_parser.add_argument(
         "--lang-src",
         default=None,
@@ -83,38 +111,106 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PROVIDER",
         help=f"Translation provider. Supported values: {', '.join(PUBLIC_TRANSLATION_PROVIDERS)}.",
     )
-    run_parser.add_argument("--steps", default=None, metavar="LIST", help="Pipeline steps to enable or patch.")
+    run_parser.add_argument(
+        "--steps",
+        default=None,
+        metavar="LIST",
+        help="Pipeline steps to enable or patch.",
+    )
     run_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
     run_parser.add_argument("--cpu", action="store_true", help="Force CPU.")
-    run_parser.add_argument("--rebuild", action="store_true", help="Rebuild intermediate artifacts.")
-    run_parser.add_argument("--delete-temp", action="store_true", help="Delete temp files after completion.")
-    run_parser.add_argument("--keep-temp", action="store_true", help="Keep temp files after completion.")
-    run_parser.add_argument("--merge-mode", default=None, metavar="MODE", help="Final merge mode.")
-    run_parser.add_argument("--tts-gain-db", type=float, default=None, metavar="DB", help="TTS gain in dB.")
-    run_parser.add_argument("--original-gain-db", type=float, default=None, metavar="DB", help="Original gain in dB.")
-    run_parser.add_argument("--ducking-amount-db", type=float, default=None, metavar="DB", help="Ducking amount in dB.")
-    run_parser.add_argument("--ducking-threshold-db", type=float, default=None, metavar="DB", help="Ducking threshold in dB.")
-    run_parser.add_argument("--ducking-attack-ms", type=int, default=None, metavar="MS", help="Ducking attack in ms.")
-    run_parser.add_argument("--ducking-release-ms", type=int, default=None, metavar="MS", help="Ducking release in ms.")
-    run_parser.add_argument("--no-loudnorm", action="store_true", help="Disable loudnorm.")
+    run_parser.add_argument(
+        "--rebuild", action="store_true", help="Rebuild intermediate artifacts."
+    )
+    run_parser.add_argument(
+        "--delete-temp", action="store_true", help="Delete temp files after completion."
+    )
+    run_parser.add_argument(
+        "--keep-temp", action="store_true", help="Keep temp files after completion."
+    )
+    run_parser.add_argument(
+        "--merge-mode", default=None, metavar="MODE", help="Final merge mode."
+    )
+    run_parser.add_argument(
+        "--tts-gain-db", type=float, default=None, metavar="DB", help="TTS gain in dB."
+    )
+    run_parser.add_argument(
+        "--original-gain-db",
+        type=float,
+        default=None,
+        metavar="DB",
+        help="Original gain in dB.",
+    )
+    run_parser.add_argument(
+        "--ducking-amount-db",
+        type=float,
+        default=None,
+        metavar="DB",
+        help="Ducking amount in dB.",
+    )
+    run_parser.add_argument(
+        "--ducking-threshold-db",
+        type=float,
+        default=None,
+        metavar="DB",
+        help="Ducking threshold in dB.",
+    )
+    run_parser.add_argument(
+        "--ducking-attack-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Ducking attack in ms.",
+    )
+    run_parser.add_argument(
+        "--ducking-release-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Ducking release in ms.",
+    )
+    run_parser.add_argument(
+        "--no-loudnorm", action="store_true", help="Disable loudnorm."
+    )
     run_parser.add_argument("--plan", action="store_true", help="Dry-run mode.")
 
     speak_parser = subparsers.add_parser("speak", help="Synthesize WAV from text.")
     speak_input = speak_parser.add_mutually_exclusive_group(required=True)
     speak_input.add_argument("--text", default=None, help="Inline text for synthesis.")
-    speak_input.add_argument("--text-file", default=None, metavar="PATH", help="Path to a text file.")
-    speak_parser.add_argument("--out-audio", required=True, metavar="PATH", help="Output WAV file.")
-    speak_parser.add_argument("--voice", default=None, metavar="VOICE", help="XTTS speaker id.")
-    speak_parser.add_argument("--speaker-wav", default=None, metavar="PATH", help="Reference WAV for voice cloning.")
-    speak_parser.add_argument("--lang", default="ru", metavar="LANG", help="Synthesis language.")
-    speak_parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override config value.")
+    speak_input.add_argument(
+        "--text-file", default=None, metavar="PATH", help="Path to a text file."
+    )
+    speak_parser.add_argument(
+        "--out-audio", required=True, metavar="PATH", help="Output WAV file."
+    )
+    speak_parser.add_argument(
+        "--voice", default=None, metavar="VOICE", help="XTTS speaker id."
+    )
+    speak_parser.add_argument(
+        "--speaker-wav",
+        default=None,
+        metavar="PATH",
+        help="Reference WAV for voice cloning.",
+    )
+    speak_parser.add_argument(
+        "--lang", default="ru", metavar="LANG", help="Synthesis language."
+    )
+    speak_parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override config value.",
+    )
     speak_parser.add_argument("--usegpu", action="store_true", help="Force GPU.")
     speak_parser.add_argument("--cpu", action="store_true", help="Force CPU.")
     speak_parser.add_argument("--plan", action="store_true", help="Dry-run mode.")
     return parser
 
 
-def _parse_steps_arg(raw_steps: str, parser: argparse.ArgumentParser) -> dict[str, bool]:
+def _parse_steps_arg(
+    raw_steps: str, parser: argparse.ArgumentParser
+) -> dict[str, bool]:
     tokens = [t.strip() for t in raw_steps.split(",") if t.strip()]
     if not tokens:
         parser.error("--steps не должен быть пустым")
@@ -127,7 +223,9 @@ def _parse_steps_arg(raw_steps: str, parser: argparse.ArgumentParser) -> dict[st
 
     def _validate(step_id: str) -> None:
         if step_id not in STEP_ID_TO_CFG_FIELD:
-            parser.error(f"Неизвестный шаг '{step_id}' в --steps. Допустимые: {', '.join(allowed)}")
+            parser.error(
+                f"Неизвестный шаг '{step_id}' в --steps. Допустимые: {', '.join(allowed)}"
+            )
 
     parsed: dict[str, bool] = {}
     if is_patch_mode:
@@ -146,7 +244,9 @@ def _parse_steps_arg(raw_steps: str, parser: argparse.ArgumentParser) -> dict[st
     return parsed
 
 
-def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[str]:
+def _build_cli_set(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> list[str]:
     if args.usegpu and args.cpu:
         parser.error("Нельзя одновременно указывать --usegpu и --cpu")
     if args.delete_temp and args.keep_temp:
@@ -207,18 +307,26 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     if in_file is not None:
         in_file_path = Path(in_file).expanduser()
         if not in_file_path.is_file():
-            parser.error(f"--in-file должен указывать на существующий файл: '{in_file_path}'")
+            parser.error(
+                f"--in-file должен указывать на существующий файл: '{in_file_path}'"
+            )
         cli_set.append(f"paths.input_video={in_file_path.resolve()}")
 
     if in_dir is not None:
         in_dir_path = Path(in_dir).expanduser()
         if not in_dir_path.is_dir():
-            parser.error(f"--in-dir должен указывать на существующую директорию: '{in_dir_path}'")
+            parser.error(
+                f"--in-dir должен указывать на существующую директорию: '{in_dir_path}'"
+            )
         cli_set.append(f"paths.input_video={in_dir_path.resolve()}")
 
     if args.steps is not None:
         parsed_steps = _parse_steps_arg(args.steps, parser)
-        patch_mode = all(tok.strip().startswith(("+", "-")) for tok in args.steps.split(",") if tok.strip())
+        patch_mode = all(
+            tok.strip().startswith(("+", "-"))
+            for tok in args.steps.split(",")
+            if tok.strip()
+        )
         if patch_mode:
             for step_id, enabled in parsed_steps.items():
                 field = STEP_ID_TO_CFG_FIELD[step_id]
@@ -231,7 +339,9 @@ def _build_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     return cli_set
 
 
-def _build_speak_cli_set(args: argparse.Namespace, parser: argparse.ArgumentParser, out_audio: Path) -> list[str]:
+def _build_speak_cli_set(
+    args: argparse.Namespace, parser: argparse.ArgumentParser, out_audio: Path
+) -> list[str]:
     if args.usegpu and args.cpu:
         parser.error("Cannot use --usegpu and --cpu together for speak")
 
@@ -248,7 +358,9 @@ def _build_speak_cli_set(args: argparse.Namespace, parser: argparse.ArgumentPars
     if args.speaker_wav:
         speaker_wav = Path(args.speaker_wav).expanduser()
         if not speaker_wav.is_file():
-            parser.error(f"--speaker-wav must point to an existing file: '{speaker_wav}'")
+            parser.error(
+                f"--speaker-wav must point to an existing file: '{speaker_wav}'"
+            )
         cli_set.append(f"tts.speaker_wav={speaker_wav.resolve()}")
 
     return cli_set
@@ -270,7 +382,9 @@ def synthesize_text_to_wav(
     if not plan:
         out_audio.parent.mkdir(parents=True, exist_ok=True)
 
-    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set or [], create_dirs=not plan)
+    cfg = load_pipeline_config_ex(
+        pipeline_path, cli_set=cli_set or [], create_dirs=not plan
+    )
     cfg.project_name = out_audio.stem
     cfg.paths.out_dir = out_audio.parent
     cfg.paths.final_audio = out_audio
@@ -281,7 +395,10 @@ def synthesize_text_to_wav(
     if use_gpu is not None:
         cfg.usegpu = bool(use_gpu)
 
-    raw_text = load_text(text=text, text_file=text_file.expanduser().resolve() if text_file is not None else None)
+    raw_text = load_text(
+        text=text,
+        text_file=text_file.expanduser().resolve() if text_file is not None else None,
+    )
     normalized = normalize_text(raw_text)
     segments = split_to_segments(normalized, max_chars=cfg.tts.text_max_chars)
     if not segments:
@@ -294,7 +411,9 @@ def synthesize_text_to_wav(
         segments_dir,
         voice=voice,
         lang=lang,
-        speaker_wav=speaker_wav.expanduser().resolve() if speaker_wav is not None else None,
+        speaker_wav=(
+            speaker_wav.expanduser().resolve() if speaker_wav is not None else None
+        ),
         plan=plan,
         show_progress=not plan,
     )
@@ -311,12 +430,16 @@ def synthesize_text_to_wav(
     return wavs
 
 
-def _run_speak(args: argparse.Namespace, parser: argparse.ArgumentParser | None = None) -> None:
+def _run_speak(
+    args: argparse.Namespace, parser: argparse.ArgumentParser | None = None
+) -> None:
     if parser is None:
         parser = build_parser()
     out_audio = Path(args.out_audio).expanduser().resolve()
     cli_set = _build_speak_cli_set(args, parser, out_audio)
-    speaker_wav = Path(args.speaker_wav).expanduser().resolve() if args.speaker_wav else None
+    speaker_wav = (
+        Path(args.speaker_wav).expanduser().resolve() if args.speaker_wav else None
+    )
     text_file = Path(args.text_file).expanduser().resolve() if args.text_file else None
 
     synthesize_text_to_wav(
@@ -332,7 +455,9 @@ def _run_speak(args: argparse.Namespace, parser: argparse.ArgumentParser | None 
     )
 
 
-def _discover_input_files(cfg: PipelineConfig, *, recursive: bool, glob_pattern: str | None) -> list[Path]:
+def _discover_input_files(
+    cfg: PipelineConfig, *, recursive: bool, glob_pattern: str | None
+) -> list[Path]:
     source = Path(cfg.paths.input_video)
     if source.is_file():
         files = [source]
@@ -352,12 +477,21 @@ def _format_steps(cfg: PipelineConfig) -> list[str]:
     rows: list[str] = []
     for step_id, field in STEP_ID_TO_CFG_FIELD.items():
         enabled = bool(getattr(cfg.steps, field))
+        if step_id == "source_separation":
+            sep_mode = str(
+                getattr(
+                    getattr(cfg, "source_separation", None), "mode", "legacy_ducking"
+                )
+            )
+            enabled = enabled and sep_mode == "separated_background"
         status = "enabled" if enabled else "disabled"
         rows.append(f"  - {step_id} ({STEP_ID_TO_INTERNAL[step_id]}): {status}")
     return rows
 
 
-def _print_effective_summary(cfg: PipelineConfig, files: list[Path], *, plan_mode: bool) -> None:
+def _print_effective_summary(
+    cfg: PipelineConfig, files: list[Path], *, plan_mode: bool
+) -> None:
     mode = "PLAN" if plan_mode else "RUN"
     print(f"[dubpipeline] Effective config summary ({mode})")
     print(f"  project_name: {cfg.project_name}")
@@ -434,11 +568,19 @@ def _build_cfg_for_input(base_cfg: PipelineConfig, input_file: Path) -> Pipeline
 
     out_dir = Path(cfg.paths.out_dir)
     cfg.paths.audio_wav = out_dir / f"{cfg.project_name}.wav"
+    cfg.paths.separation_dir = out_dir / "separation" / cfg.project_name
+    cfg.paths.separation_vocals_wav = cfg.paths.separation_dir / "vocals.wav"
+    cfg.paths.separation_background_wav = cfg.paths.separation_dir / "background.wav"
+    cfg.paths.separation_metadata_json = cfg.paths.separation_dir / "metadata.json"
     cfg.paths.segments_file = out_dir / f"{cfg.project_name}.segments.json"
-    cfg.paths.segments_tgt_file = out_dir / f"{cfg.project_name}.segments.{target_lang}.json"
+    cfg.paths.segments_tgt_file = (
+        out_dir / f"{cfg.project_name}.segments.{target_lang}.json"
+    )
     cfg.paths.srt_file_en = out_dir / f"{cfg.project_name}.srt"
     cfg.paths.tts_segments_dir = out_dir / "segments" / f"tts_{target_lang}_segments"
-    cfg.paths.tts_segments_aligned_dir = out_dir / "segments" / f"tts_{target_lang}_segments_aligned"
+    cfg.paths.tts_segments_aligned_dir = (
+        out_dir / "segments" / f"tts_{target_lang}_segments_aligned"
+    )
     cfg.paths.final_video = out_dir / f"{cfg.project_name}.{target_lang}.muxed.mp4"
     return cfg
 
@@ -484,9 +626,15 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
 
 @timed_run(log=info, run_name="RUN", top_n=50)
 def run_pipeline(cfg, pipeline_path: Path) -> None:
-    from dubpipeline.steps import step_align, step_merge_py, step_translate, step_tts, step_whisperx
+    from dubpipeline.steps import (
+        step_align,
+        step_merge_py,
+        step_translate,
+        step_tts,
+        step_whisperx,
+    )
     from dubpipeline.translation.service import TranslationModelError, TranslatorService
-    from .steps import step_extract_audio
+    from .steps import step_extract_audio, step_source_separation
 
     Const.bind(cfg)
     device = cfg.device
@@ -513,6 +661,21 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("00_rebuild_cleanup", log=info):
             rebuild_cleanup_safe(cfg)
 
+    external_voice_track = str(getattr(cfg, "external_voice_track", "") or "").strip()
+    extract_audio_enabled = bool(cfg.steps.extract_audio)
+    if external_voice_track:
+        external_voice_path = Path(external_voice_track).expanduser().resolve()
+        if not external_voice_path.is_file():
+            raise FileNotFoundError(
+                f"External voice track not found: {external_voice_path}"
+            )
+        voice_input_wav = Path(cfg.paths.voice_input_wav)
+        voice_input_wav.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(external_voice_path, voice_input_wav)
+        cfg.paths.audio_wav = voice_input_wav
+        extract_audio_enabled = False
+        info(f"[dubpipeline] external_voice_track: {external_voice_path}")
+
     def tts_and_align(c) -> None:
         with timed_block("04a_tts", log=info):
             step_tts.run(c)
@@ -520,7 +683,14 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
             step_align.run(c)
 
     steps: list[tuple[str, bool, Callable]] = [
-        ("01_extract_audio", cfg.steps.extract_audio, step_extract_audio.run),
+        ("01_extract_audio", extract_audio_enabled, step_extract_audio.run),
+        (
+            "01b_source_separation",
+            bool(cfg.steps.source_separation)
+            and str(getattr(cfg.source_separation, "mode", "legacy_ducking"))
+            == "separated_background",
+            step_source_separation.run,
+        ),
         ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
         ("03_translate", cfg.steps.translate, step_translate.run),
         ("04_tts+align", cfg.steps.tts, tts_and_align),
@@ -563,7 +733,9 @@ def main() -> None:
     os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if args.keep_temp else "0"
     cli_set = _build_cli_set(args, parser)
 
-    cfg = load_pipeline_config_ex(pipeline_path, cli_set=cli_set, create_dirs=not args.plan)
+    cfg = load_pipeline_config_ex(
+        pipeline_path, cli_set=cli_set, create_dirs=not args.plan
+    )
     _validate_run_language_pair(
         cfg,
         parser,
@@ -581,7 +753,9 @@ def main() -> None:
     input_source = _detect_input_source(args)
     print(f"[dubpipeline] input source: {input_source}")
 
-    files = _discover_input_files(cfg, recursive=effective_recursive, glob_pattern=effective_glob)
+    files = _discover_input_files(
+        cfg, recursive=effective_recursive, glob_pattern=effective_glob
+    )
     _print_effective_summary(cfg, files, plan_mode=args.plan)
 
     if args.plan:

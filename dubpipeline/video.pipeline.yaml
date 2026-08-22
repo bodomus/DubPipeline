@@ -25,7 +25,7 @@ steps:
   tts: true
   merge: true
 output:
-  move_to_dir: E:/Lessons/UE
+  move_to_dir: J:/Projects/UE5/Unreal Complete Scene - Old West Environment/output
 tts:
   voice: Luis Moray
   sample_rate: 22050

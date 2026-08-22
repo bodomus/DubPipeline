@@ -4,12 +4,17 @@ import subprocess
 from pathlib import Path
 
 from dubpipeline.config import PipelineConfig, normalize_audio_update_mode
+from dubpipeline.source_separation import resolve_background_audio_for_merge
 from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
 from dubpipeline.consts import Const
-from dubpipeline.steps.step_merge_hq import merge_hq_config_from_pipeline, render_hq_mix_audio
+from dubpipeline.steps.step_merge_hq import (
+    merge_hq_config_from_pipeline,
+    render_hq_mix_audio,
+)
 from dubpipeline.utils.atomic_replace import AtomicFileReplacer
+
 
 def mux_replace(
     video: Path,
@@ -33,14 +38,21 @@ def mux_replace(
         norm_arg(str(video)),
         "-i",
         norm_arg(str(audio)),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", audio_codec,
-        "-b:a", audio_bitrate,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        audio_bitrate,
         "-shortest",
-        "-metadata:s:a:0", f"language={ru_lang}",
-        "-metadata:s:a:0", f"title={ru_title}",
+        "-metadata:s:a:0",
+        f"language={ru_lang}",
+        "-metadata:s:a:0",
+        f"title={ru_title}",
         norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
@@ -70,18 +82,28 @@ def mux_add(
         norm_arg(str(video)),
         "-i",
         norm_arg(str(audio)),
-        "-map", "0:v:0",
-        "-map", "0:a:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", audio_codec,
-        "-b:a", audio_bitrate,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        audio_bitrate,
         "-shortest",
         # метаданные для дорожек
-        "-metadata:s:a:0", f"language={orig_lang}",
-        "-metadata:s:a:0", f"title={orig_title}",
-        "-metadata:s:a:1", f"language={ru_lang}",
-        "-metadata:s:a:1", f"title={ru_title}",
+        "-metadata:s:a:0",
+        f"language={orig_lang}",
+        "-metadata:s:a:0",
+        f"title={orig_title}",
+        "-metadata:s:a:1",
+        f"language={ru_lang}",
+        "-metadata:s:a:1",
+        f"title={ru_title}",
         norm_arg(str(out_path)),
     ]
     run_ffmpeg(cmd)
@@ -145,7 +167,7 @@ def resolve_mux_mode(mode: str) -> MuxMode:
     raise ValueError(f"Unknown mux mode: {mode}")
 
 
-def run(cfg:PipelineConfig) -> None:
+def run(cfg: PipelineConfig) -> None:
     Const.bind(cfg)
     video = cfg.paths.input_video
     audio = cfg.paths.audio_wav
@@ -153,13 +175,17 @@ def run(cfg:PipelineConfig) -> None:
     update_existing = bool(getattr(output_cfg, "update_existing_file", False))
     configured_mode = getattr(output_cfg, "audio_update_mode", "") or cfg.mode
     out_path = cfg.paths.final_video
-    audio_merge_mode = str(getattr(getattr(cfg, "audio_merge", None), "mode", "") or "").strip().lower()
-#
-    #(venv) λ python .\tools\mux_ru_audio.py ^
-  #--video in\lecture_sample.mp4 ^
-  #--audio out\lecture_sample.ru_full.wav ^
-  #--out out\lecture_sample.ru.with_both.mkv ^
-  #--mode add
+    audio_merge_mode = (
+        str(getattr(getattr(cfg, "audio_merge", None), "mode", "") or "")
+        .strip()
+        .lower()
+    )
+    #
+    # (venv) λ python .\tools\mux_ru_audio.py ^
+    # --video in\lecture_sample.mp4 ^
+    # --audio out\lecture_sample.ru_full.wav ^
+    # --out out\lecture_sample.ru.with_both.mkv ^
+    # --mode add
 
     #
     #
@@ -168,7 +194,7 @@ def run(cfg:PipelineConfig) -> None:
     if not audio.exists():
         raise SystemExit(f"Audio file not found: {audio}")
 
-    #out_path.parent.mkdir(parents=True, exist_ok=True)
+    # out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Video: {video}\n")
     print(f"Audio (target full): {audio}\n")
@@ -180,6 +206,7 @@ def run(cfg:PipelineConfig) -> None:
 
     if audio_merge_mode == "hq_ducking":
         hq_cfg, selector = merge_hq_config_from_pipeline(cfg)
+        background_wav = resolve_background_audio_for_merge(cfg)
         info(f"[merge] selected merge mode: {audio_merge_mode}")
 
         ffmpeg_bin = str(getattr(getattr(cfg, "ffmpeg", None), "bin", "ffmpeg"))
@@ -192,7 +219,9 @@ def run(cfg:PipelineConfig) -> None:
         previous_keep_temp = os.getenv("DUBPIPELINE_KEEP_TEMP")
         os.environ["DUBPIPELINE_FFMPEG_BIN"] = ffmpeg_bin
         os.environ["DUBPIPELINE_FFPROBE_BIN"] = ffprobe_bin
-        os.environ["DUBPIPELINE_KEEP_TEMP"] = "1" if bool(getattr(cfg, "keep_temp", False)) else "0"
+        os.environ["DUBPIPELINE_KEEP_TEMP"] = (
+            "1" if bool(getattr(cfg, "keep_temp", False)) else "0"
+        )
         mix_path = Path(cfg.paths.out_dir) / f"{effective_output.stem}.hq_mix.m4a"
         replacer: AtomicFileReplacer | None = None
         mux_out_path = effective_output
@@ -208,6 +237,7 @@ def run(cfg:PipelineConfig) -> None:
                 work_dir=Path(cfg.paths.out_dir),
                 cfg=hq_cfg,
                 original_audio_stream_selector=selector,
+                background_wav=background_wav,
             )
             try:
                 mux_smart(
@@ -218,9 +248,13 @@ def run(cfg:PipelineConfig) -> None:
                     ffmpeg=ffmpeg_bin,
                     ffprobe=ffprobe_bin,
                     orig_lang=getattr(getattr(cfg, "mux", None), "orig_lang", "eng"),
-                    orig_title=getattr(getattr(cfg, "mux", None), "orig_track_title", "Original"),
+                    orig_title=getattr(
+                        getattr(cfg, "mux", None), "orig_track_title", "Original"
+                    ),
                     ru_lang=getattr(getattr(cfg, "mux", None), "target_lang", "rus"),
-                    ru_title=getattr(getattr(cfg, "mux", None), "target_track_title", "Russian_Dub"),
+                    ru_title=getattr(
+                        getattr(cfg, "mux", None), "target_track_title", "Russian_Dub"
+                    ),
                 )
                 if replacer is not None:
                     replacer.replace_with_temp(video, mux_out_path, keep_backup=False)
@@ -259,4 +293,3 @@ def run(cfg:PipelineConfig) -> None:
     except Exception:
         replacer.cleanup_temp(temp_out)
         raise
-
