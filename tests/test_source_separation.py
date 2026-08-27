@@ -196,6 +196,19 @@ source_separation:
                     runner=lambda command: self.fail("runner should not be called"),
                 )
 
+    def test_missing_model_file_falls_back_before_runner_when_configured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._config(Path(tmp), fallback="legacy_ducking")
+            Path(cfg.paths.workdir, "model.ckpt").unlink()
+
+            result = run_source_separation(
+                cfg,
+                runner=lambda command: self.fail("runner should not be called"),
+            )
+
+            self.assertIsNone(result)
+            self.assertIsNone(resolve_background_audio_for_merge(cfg))
+
     def test_failure_falls_back_only_when_configured(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._config(Path(tmp), fallback="legacy_ducking")

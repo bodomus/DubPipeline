@@ -127,6 +127,19 @@ def legacy_fallback_enabled(cfg: PipelineConfig) -> bool:
     return fallback == LEGACY_DUCKING_MODE
 
 
+def validate_model_file_or_fallback(
+    cfg: PipelineConfig, request: SourceSeparationRequest
+) -> bool:
+    try:
+        validate_model_file(request)
+    except SourceSeparationError as exc:
+        if legacy_fallback_enabled(cfg):
+            warn(f"[source_separation] model unavailable; using legacy ducking: {exc}")
+            return False
+        raise
+    return True
+
+
 def build_request(cfg: PipelineConfig) -> SourceSeparationRequest:
     sep_cfg = cfg.source_separation
     command = tuple(_coerce_command(getattr(sep_cfg, "command", [])))
@@ -202,7 +215,9 @@ def run_source_separation(
         raise FileNotFoundError(
             f"Source audio for separation not found: {request.source_audio}"
         )
-    validate_model_file(request)
+    if not validate_model_file_or_fallback(cfg, request):
+        remove_stale_stems(request)
+        return None
 
     if request.cache_enabled:
         cached = read_cached_result(request)
@@ -230,7 +245,8 @@ def resolve_background_audio_for_merge(cfg: PipelineConfig) -> Path | None:
     if not source_separation_enabled(cfg):
         return None
     request = build_request(cfg)
-    validate_model_file(request)
+    if not validate_model_file_or_fallback(cfg, request):
+        return None
     cached = read_cached_result(request)
     if cached is not None:
         return cached.background_wav

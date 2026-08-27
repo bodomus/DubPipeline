@@ -31,16 +31,26 @@
 - Added regression coverage for stale stems + invalid metadata/cache miss + separator failure + legacy fallback.
 - Removed the unrelated `video.pipeline.yaml` output path content change; `git diff --exit-code -- dubpipeline/video.pipeline.yaml` reports no content diff. The file may still appear modified in `git status` due line-ending normalization metadata, and `git restore` was blocked by the safety policy because this file had been pre-existing user work.
 
+## Final Small Fix
+
+- Fixed missing BS Roformer model handling for fallback-enabled configs.
+- Root cause: model validation happened before the fallback-protected separation path, so `fallback_mode: legacy_ducking` still raised `SourceSeparationError` for a missing checkpoint.
+- New behavior: missing or invalid `source_separation.model_path` logs a warning and returns to legacy original-audio ducking when `fallback_mode: legacy_ducking` is configured. The external separator runner is not invoked.
+- Preserved strict behavior for `fallback_mode: none`: missing model path/file still raises `SourceSeparationError` before runner execution.
+- Merge background resolution now applies the same fallback-aware model validation and resolves to the original/legacy audio path instead of separated background when the model is unavailable.
+- Added regression coverage for missing model + `legacy_ducking` fallback, including no runner call and merge fallback to original audio.
+
 ## Validation
 
 - `python -m py_compile` on changed Python files: passed.
 - `python -m py_compile dubpipeline/source_separation.py tests/test_source_separation.py`: passed.
-- `python -m pytest tests/test_source_separation.py -q`: 11 passed, 1 warning.
+- `.venv\Scripts\python.exe -m py_compile dubpipeline\source_separation.py tests\test_source_separation.py`: passed.
+- `.venv\Scripts\python.exe -m pytest tests\test_source_separation.py -q`: 12 passed, 1 warning. The first sandboxed run failed because `TemporaryDirectory` under `A:\TEMP` was denied; the successful run was repeated outside sandbox.
 - `python -m pytest tests/test_source_separation.py tests/test_cli.py tests/test_step_merge_py.py tests/test_audio_mix_step.py tests/test_step_merge_hq.py -q`: 56 passed, 3 warnings, 2 subtests passed.
 - `python -m dubpipeline.cli --help`: passed.
 - `python -m dubpipeline.cli run dubpipeline/video.pipeline.yaml --in-file tests/TXT/Emar_Krasnyiy_Kedr_3_Stepnyie_razboyniki.txt --plan`: passed; source separation disabled by default.
 - `python -m dubpipeline.cli run dubpipeline/video.pipeline.yaml --in-file tests/TXT/Emar_Krasnyiy_Kedr_3_Stepnyie_razboyniki.txt --set source_separation.mode=separated_background --plan`: passed; source separation enabled in plan summary.
-- `code-review-graph update --brief`: completed with UTF-8 output.
+- `code-review-graph update --brief`: completed with UTF-8 output after an initial cp1251 console encoding failure.
 - `graphify update .`: completed outside sandbox after sandbox access-denied on temporary directories.
 
 ## Real BS Roformer Validation
