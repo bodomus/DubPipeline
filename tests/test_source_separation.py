@@ -125,6 +125,7 @@ source_separation:
         )
         cfg = load_pipeline_config_ex(pipeline_file, create_dirs=False)
         _write(cfg.paths.audio_wav)
+        _write(Path(cfg.paths.workdir) / "model.ckpt", b"model-v1")
         return cfg
 
     def test_provider_runner_writes_stems_and_metadata(self):
@@ -173,6 +174,28 @@ source_separation:
 
             self.assertIsNone(read_cached_result(request))
 
+    def test_cache_miss_when_model_file_changes_at_same_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._config(Path(tmp))
+            request = build_request(cfg)
+            _write(request.vocals_wav, b"vocals")
+            _write(request.background_wav, b"background")
+            write_metadata(request)
+            _write(Path(request.model_path), b"model-v2")
+
+            self.assertIsNone(read_cached_result(request))
+
+    def test_missing_model_file_fails_before_runner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._config(Path(tmp))
+            Path(cfg.paths.workdir, "model.ckpt").unlink()
+
+            with self.assertRaisesRegex(SourceSeparationError, "model_path"):
+                run_source_separation(
+                    cfg,
+                    runner=lambda command: self.fail("runner should not be called"),
+                )
+
     def test_failure_falls_back_only_when_configured(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._config(Path(tmp), fallback="legacy_ducking")
@@ -185,6 +208,27 @@ source_separation:
             )
 
             self.assertIsNone(result)
+            self.assertIsNone(resolve_background_audio_for_merge(cfg))
+
+    def test_stale_stems_are_not_used_after_failed_fresh_run_with_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = self._config(Path(tmp), fallback="legacy_ducking")
+            request = build_request(cfg)
+            _write(request.vocals_wav, b"stale vocals")
+            _write(request.background_wav, b"stale background")
+            write_metadata(request)
+            _write(request.source_audio, b"changed source means cache miss")
+
+            result = run_source_separation(
+                cfg,
+                runner=lambda command: subprocess.CompletedProcess(
+                    command, 2, "", "boom"
+                ),
+            )
+
+            self.assertIsNone(result)
+            self.assertFalse(request.vocals_wav.exists())
+            self.assertFalse(request.background_wav.exists())
             self.assertIsNone(resolve_background_audio_for_merge(cfg))
 
     def test_failure_without_fallback_raises(self):
@@ -202,7 +246,10 @@ source_separation:
     def test_merge_uses_separated_background_when_available(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = self._config(Path(tmp), fallback="none")
-            _write(cfg.paths.separation_background_wav, b"background")
+            request = build_request(cfg)
+            _write(request.vocals_wav, b"vocals")
+            _write(request.background_wav, b"background")
+            write_metadata(request)
 
             self.assertEqual(
                 resolve_background_audio_for_merge(cfg),

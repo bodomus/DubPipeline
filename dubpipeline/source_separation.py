@@ -130,6 +130,7 @@ def legacy_fallback_enabled(cfg: PipelineConfig) -> bool:
 def build_request(cfg: PipelineConfig) -> SourceSeparationRequest:
     sep_cfg = cfg.source_separation
     command = tuple(_coerce_command(getattr(sep_cfg, "command", [])))
+    model_path = _resolve_model_path(str(sep_cfg.model_path or "").strip(), cfg)
     return SourceSeparationRequest(
         source_audio=Path(cfg.paths.audio_wav),
         output_dir=Path(cfg.paths.separation_dir),
@@ -137,7 +138,7 @@ def build_request(cfg: PipelineConfig) -> SourceSeparationRequest:
         background_wav=Path(cfg.paths.separation_background_wav),
         metadata_json=Path(cfg.paths.separation_metadata_json),
         provider=str(sep_cfg.provider or BS_ROFORMER_PROVIDER).strip().lower(),
-        model_path=str(sep_cfg.model_path or "").strip(),
+        model_path=model_path,
         command=command,
         cache_enabled=bool(sep_cfg.cache_enabled),
     )
@@ -201,6 +202,7 @@ def run_source_separation(
         raise FileNotFoundError(
             f"Source audio for separation not found: {request.source_audio}"
         )
+    validate_model_file(request)
 
     if request.cache_enabled:
         cached = read_cached_result(request)
@@ -208,6 +210,7 @@ def run_source_separation(
             info(f"[source_separation] cache hit: {request.background_wav}")
             return cached
 
+    remove_stale_stems(request)
     provider = create_provider(request.provider, runner=runner)
     try:
         result = provider.separate(request)
@@ -226,16 +229,19 @@ def run_source_separation(
 def resolve_background_audio_for_merge(cfg: PipelineConfig) -> Path | None:
     if not source_separation_enabled(cfg):
         return None
-    background = Path(cfg.paths.separation_background_wav)
-    if background.exists() and background.stat().st_size > 0:
-        return background
+    request = build_request(cfg)
+    validate_model_file(request)
+    cached = read_cached_result(request)
+    if cached is not None:
+        return cached.background_wav
     if legacy_fallback_enabled(cfg):
         warn(
-            "[source_separation] separated background is missing; using legacy original audio"
+            "[source_separation] separated background is not valid for current input/config/model; "
+            "using legacy original audio"
         )
         return None
     raise FileNotFoundError(
-        f"Separated background is required but missing: {background}"
+        f"Separated background is required but missing or stale: {request.background_wav}"
     )
 
 
@@ -276,7 +282,7 @@ def build_metadata(request: SourceSeparationRequest) -> dict[str, Any]:
         "schema": 1,
         "source": source_identity(request.source_audio),
         "provider": request.provider,
-        "model_path": _stable_model_path(request.model_path),
+        "model": model_identity(request),
         "command": list(request.command),
         "outputs": {
             "vocals_wav": str(request.vocals_wav),
@@ -295,10 +301,52 @@ def source_identity(path: Path) -> dict[str, Any]:
     }
 
 
+def model_identity(request: SourceSeparationRequest) -> dict[str, Any]:
+    if request.provider != BS_ROFORMER_PROVIDER:
+        return {"path": _stable_model_path(request.model_path)}
+    model_path = validate_model_file(request)
+    stat = model_path.stat()
+    return {
+        "path": str(model_path),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "sha256": _sha256_file(model_path),
+    }
+
+
+def validate_model_file(request: SourceSeparationRequest) -> Path:
+    if request.provider != BS_ROFORMER_PROVIDER:
+        return Path(request.model_path)
+    if not request.model_path:
+        raise SourceSeparationError(
+            "source_separation.model_path is required for provider 'bs_roformer'"
+        )
+    model_path = Path(request.model_path)
+    if not model_path.is_file():
+        raise SourceSeparationError(
+            f"source_separation.model_path does not exist or is not a file: {model_path}"
+        )
+    return model_path
+
+
+def remove_stale_stems(request: SourceSeparationRequest) -> None:
+    for path in (request.vocals_wav, request.background_wav):
+        path.unlink(missing_ok=True)
+
+
+def _resolve_model_path(model_path: str, cfg: PipelineConfig) -> str:
+    if not model_path:
+        return ""
+    path = Path(model_path).expanduser()
+    if not path.is_absolute():
+        path = Path(cfg.paths.workdir) / path
+    return str(path.resolve())
+
+
 def _stable_model_path(model_path: str) -> str:
     if not model_path:
         return ""
-    return str(Path(model_path).expanduser())
+    return str(Path(model_path).expanduser().resolve())
 
 
 def _sha256_file(path: Path) -> str:
