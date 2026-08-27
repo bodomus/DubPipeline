@@ -19,9 +19,11 @@ from dubpipeline.models.catalog import (
     resolve_model_spec,
     resolve_default_model_id,
 )
-from dubpipeline.translation.providers import PUBLIC_TRANSLATION_PROVIDERS, QWEN_QUANTIZATION_VALUES
+from dubpipeline.translation.providers import (
+    PUBLIC_TRANSLATION_PROVIDERS,
+    QWEN_QUANTIZATION_VALUES,
+)
 from dubpipeline.utils.logging import info, warn
-
 
 # =============================================================================
 # Config "single source of truth"
@@ -31,7 +33,7 @@ from dubpipeline.utils.logging import info, warn
 #   DB_<GRP>__<KEY>[__<SUBKEY>...]=value
 # where <GRP> is 3-letter group code:
 #   GEN (root), PTH (paths), FFM (ffmpeg), WHX (whisperx), TRN (translate),
-#   TTS (tts), MUX (mux), STP (steps)
+#   TTS (tts), MUX (mux), SEP (source_separation), STP (steps)
 #
 # Legacy ENV supported (for backward compatibility with older runs):
 #   DUBPIPELINE_*
@@ -42,6 +44,7 @@ from dubpipeline.utils.logging import info, warn
 # Dataclasses (typed config)
 # -------------------------
 
+
 @dataclass
 class LanguagesConfig:
     src: str = "en"
@@ -49,7 +52,10 @@ class LanguagesConfig:
 
 
 SUPPORTED_TRANSLATION_LANGUAGES: tuple[str, ...] = ("de", "fr", "es", "ru")
-SUPPORTED_SOURCE_LANGUAGES: tuple[str, ...] = ("auto", "en") + SUPPORTED_TRANSLATION_LANGUAGES
+SUPPORTED_SOURCE_LANGUAGES: tuple[str, ...] = (
+    "auto",
+    "en",
+) + SUPPORTED_TRANSLATION_LANGUAGES
 LEGACY_TRANSLATION_LANGUAGES: tuple[str, ...] = ("en",)
 MUX_LANGUAGE_TAGS: dict[str, str] = {
     "en": "eng",
@@ -159,6 +165,7 @@ def normalize_input_mode(value: str | None) -> str:
 @dataclass
 class StepsConfig:
     extract_audio: bool = True
+    source_separation: bool = True
     asr_whisperx: bool = True
     translate: bool = True
     tts: bool = True
@@ -169,11 +176,19 @@ class StepsConfig:
 @dataclass
 class PathsTemplatesConfig:
     audio_wav: str = "{out_dir}/{project_name}.wav"
+    separation_dir: str = "{out_dir}/separation/{project_name}"
+    separation_vocals_wav: str = "{out_dir}/separation/{project_name}/vocals.wav"
+    separation_background_wav: str = (
+        "{out_dir}/separation/{project_name}/background.wav"
+    )
+    separation_metadata_json: str = "{out_dir}/separation/{project_name}/metadata.json"
     segments_json: str = "{out_dir}/{project_name}.segments.json"
     segments_tgt_json: str = "{out_dir}/{project_name}.segments.{target_lang}.json"
     srt_en: str = "{out_dir}/{project_name}.srt"
     tts_segments_dir: str = "{out_dir}/segments/tts_{target_lang}_segments"
-    tts_segments_aligned_dir: str = "{out_dir}/segments/tts_{target_lang}_segments_aligned"
+    tts_segments_aligned_dir: str = (
+        "{out_dir}/segments/tts_{target_lang}_segments_aligned"
+    )
     final_video: str = "{out_dir}/{project_name}.{target_lang}.muxed.mp4"
 
     @property
@@ -195,6 +210,10 @@ class PathsConfig:
 
     # derived/outputs
     audio_wav: Path = Path()
+    separation_dir: Path = Path()
+    separation_vocals_wav: Path = Path()
+    separation_background_wav: Path = Path()
+    separation_metadata_json: Path = Path()
     segments_file: Path = Path()
     segments_ru_file: Path = Path()
     srt_file_en: Path = Path()
@@ -206,7 +225,6 @@ class PathsConfig:
     translated_voice_wav: Path = Path()
     background_wav: Path = Path()
     mixed_wav: Path = Path()
-
 
     # templates (keep for debugging / printing)
     templates: PathsTemplatesConfig = field(default_factory=PathsTemplatesConfig)
@@ -321,7 +339,9 @@ class TtsConfig:
     text_max_chars: int = 400
 
     gap_ms: int = 80
-    breaks: list[str] = field(default_factory=lambda: [". ", "! ", "? ", "; ", ": ", " — ", ", "])
+    breaks: list[str] = field(
+        default_factory=lambda: [". ", "! ", "? ", "; ", ": ", " — ", ", "]
+    )
 
     fast_latents: bool = True
     try_single_call: bool = True
@@ -399,6 +419,16 @@ class AudioMergeConfig:
 
 
 @dataclass
+class SourceSeparationConfig:
+    mode: str = "legacy_ducking"
+    provider: str = "bs_roformer"
+    model_path: str = ""
+    command: list[str] = field(default_factory=list)
+    fallback_mode: str = "none"
+    cache_enabled: bool = True
+
+
+@dataclass
 class PipelineConfig:
     # general
     project_name: str
@@ -424,7 +454,9 @@ class PipelineConfig:
     mux: MuxConfig = field(default_factory=MuxConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     audio_merge: AudioMergeConfig = field(default_factory=AudioMergeConfig)
-
+    source_separation: SourceSeparationConfig = field(
+        default_factory=SourceSeparationConfig
+    )
 
     @property
     def device(self) -> str:
@@ -476,12 +508,14 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
         "update_existing_file": False,
     },
     "audio_merge": asdict(AudioMergeConfig()),
+    "source_separation": asdict(SourceSeparationConfig()),
 }
 
 
 # -------------------------
 # Helper functions
 # -------------------------
+
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """Recursively merge override into base (dicts merged, other types replaced)."""
@@ -506,7 +540,9 @@ def _parse_scalar(value: str) -> Any:
     if low in {"null", "none"}:
         return None
     # json (lists/dicts)
-    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+    if (s.startswith("{") and s.endswith("}")) or (
+        s.startswith("[") and s.endswith("]")
+    ):
         try:
             return json.loads(s)
         except Exception:
@@ -539,7 +575,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
     env = dict(environ or os.environ)
 
     grp_map = {
-        "GEN": "",       # root
+        "GEN": "",  # root
         "PTH": "paths",
         "FFM": "ffmpeg",
         "WHX": "whisperx",
@@ -548,6 +584,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "TTS": "tts",
         "MUX": "mux",
         "AMR": "audio_merge",
+        "SEP": "source_separation",
         "STP": "steps",
     }
 
@@ -591,6 +628,12 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_OUTPUT_MOVE_TO_DIR": "output.move_to_dir",
         "DUBPIPELINE_OUTPUT_UPDATE_EXISTING_FILE": "output.update_existing_file",
         "DUBPIPELINE_OUTPUT_AUDIO_UPDATE_MODE": "output.audio_update_mode",
+        # Source separation
+        "DUBPIPELINE_SOURCE_SEPARATION_MODE": "source_separation.mode",
+        "DUBPIPELINE_SOURCE_SEPARATION_PROVIDER": "source_separation.provider",
+        "DUBPIPELINE_SOURCE_SEPARATION_MODEL_PATH": "source_separation.model_path",
+        "DUBPIPELINE_SOURCE_SEPARATION_FALLBACK_MODE": "source_separation.fallback_mode",
+        "DUBPIPELINE_SOURCE_SEPARATION_CACHE_ENABLED": "source_separation.cache_enabled",
         # Existing subtitles mode
         "DUBPIPELINE_USE_EXISTING_SUBTITLES": "use_existing_subtitles",
     }
@@ -663,9 +706,11 @@ def _format_all_strings(obj: Any, variables: Dict[str, Any]) -> Any:
     return obj
 
 
-def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool = True) -> PathsConfig:
+def _resolve_paths(
+    raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool = True
+) -> PathsConfig:
     paths = raw.get("paths", {}) or {}
-    tmpl = (paths.get("templates", {}) or {})
+    tmpl = paths.get("templates", {}) or {}
     # Backward-compat (old keys)
     if "deleteSRT" in raw and "delete_srt" not in raw:
         raw["delete_srt"] = raw.get("deleteSRT")
@@ -693,8 +738,18 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
         or "{project_name}.mp4"
     )
     languages = raw.get("languages") or {}
-    source_lang = str(languages.get("src", LanguagesConfig().src) or LanguagesConfig().src).strip().lower() or LanguagesConfig().src
-    target_lang = str(languages.get("tgt", LanguagesConfig().tgt) or LanguagesConfig().tgt).strip().lower() or LanguagesConfig().tgt
+    source_lang = (
+        str(languages.get("src", LanguagesConfig().src) or LanguagesConfig().src)
+        .strip()
+        .lower()
+        or LanguagesConfig().src
+    )
+    target_lang = (
+        str(languages.get("tgt", LanguagesConfig().tgt) or LanguagesConfig().tgt)
+        .strip()
+        .lower()
+        or LanguagesConfig().tgt
+    )
     variables = {
         "project_name": raw.get("project_name", ""),
         "project_dir": str(project_dir),
@@ -720,24 +775,30 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
     # If user provided the old key but not the new one, prefer the old key.
     if isinstance(tmpl, dict):
         if "segments_ru_json" in tmpl and (
-            "segments_tgt_json" not in tmpl or tmpl.get("segments_tgt_json") == default_tmpl.get("segments_tgt_json")
+            "segments_tgt_json" not in tmpl
+            or tmpl.get("segments_tgt_json") == default_tmpl.get("segments_tgt_json")
         ):
             merged_tmpl["segments_tgt_json"] = tmpl.get("segments_ru_json")
         if "segments_path" in tmpl and (
-            "tts_segments_dir" not in tmpl or tmpl.get("tts_segments_dir") == default_tmpl.get("tts_segments_dir")
+            "tts_segments_dir" not in tmpl
+            or tmpl.get("tts_segments_dir") == default_tmpl.get("tts_segments_dir")
         ):
             merged_tmpl["tts_segments_dir"] = tmpl.get("segments_path")
         if "segments_align_path" in tmpl and (
             "tts_segments_aligned_dir" not in tmpl
-            or tmpl.get("tts_segments_aligned_dir") == default_tmpl.get("tts_segments_aligned_dir")
+            or tmpl.get("tts_segments_aligned_dir")
+            == default_tmpl.get("tts_segments_aligned_dir")
         ):
             merged_tmpl["tts_segments_aligned_dir"] = tmpl.get("segments_align_path")
         if "tts_segments_align_dir" in tmpl and (
             "tts_segments_aligned_dir" not in tmpl
-            or tmpl.get("tts_segments_aligned_dir") == default_tmpl.get("tts_segments_aligned_dir")
+            or tmpl.get("tts_segments_aligned_dir")
+            == default_tmpl.get("tts_segments_aligned_dir")
         ):
             merged_tmpl["tts_segments_aligned_dir"] = tmpl.get("tts_segments_align_dir")
-        if "srt_file_en" in tmpl and ("srt_en" not in tmpl or tmpl.get("srt_en") == default_tmpl.get("srt_en")):
+        if "srt_file_en" in tmpl and (
+            "srt_en" not in tmpl or tmpl.get("srt_en") == default_tmpl.get("srt_en")
+        ):
             merged_tmpl["srt_en"] = tmpl.get("srt_file_en")
 
     merged_tmpl = _format_all_strings(merged_tmpl, variables)
@@ -749,9 +810,7 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
         return p
 
     template_values = default_tmpl | {
-        key: str(value)
-        for key, value in merged_tmpl.items()
-        if key in default_tmpl
+        key: str(value) for key, value in merged_tmpl.items() if key in default_tmpl
     }
 
     return PathsConfig(
@@ -759,13 +818,19 @@ def _resolve_paths(raw: Dict[str, Any], project_dir: Path, *, create_dirs: bool 
         out_dir=out_dir,
         input_video=input_video,
         audio_wav=_p(merged_tmpl["audio_wav"]),
+        separation_dir=_p(merged_tmpl["separation_dir"]),
+        separation_vocals_wav=_p(merged_tmpl["separation_vocals_wav"]),
+        separation_background_wav=_p(merged_tmpl["separation_background_wav"]),
+        separation_metadata_json=_p(merged_tmpl["separation_metadata_json"]),
         segments_file=_p(merged_tmpl["segments_json"]),
         segments_ru_file=_p(merged_tmpl["segments_tgt_json"]),
         srt_file_en=_p(merged_tmpl["srt_en"]),
         tts_segments_dir=_p(merged_tmpl["tts_segments_dir"]),
         tts_segments_aligned_dir=_p(merged_tmpl["tts_segments_aligned_dir"]),
         final_video=_p(merged_tmpl["final_video"]),
-        input_text=Path(paths.get("input_text")).resolve() if paths.get("input_text") else None,
+        input_text=(
+            Path(paths.get("input_text")).resolve() if paths.get("input_text") else None
+        ),
         final_audio=_p(paths.get("final_audio")) if paths.get("final_audio") else None,
         templates=PathsTemplatesConfig(**template_values),
     )
@@ -824,7 +889,11 @@ def load_pipeline_config_ex(
     whisperx = WhisperxConfig(
         model_name=str(whisperx_raw.get("model_name", WhisperxConfig().model_name)),
         batch_size=int(whisperx_raw.get("batch_size", WhisperxConfig().batch_size)),
-        max_gap_between_words=float(whisperx_raw.get("max_gap_between_words", WhisperxConfig().max_gap_between_words)),
+        max_gap_between_words=float(
+            whisperx_raw.get(
+                "max_gap_between_words", WhisperxConfig().max_gap_between_words
+            )
+        ),
         word_merge=wm,
         release_vram=bool(whisperx_raw.get("release_vram", True)),
     )
@@ -836,7 +905,9 @@ def load_pipeline_config_ex(
     translation.model = str(translation.model or "").strip()
     translation.device = str(translation.device or "auto").strip().lower() or "auto"
     translation.dtype = str(translation.dtype or "auto").strip().lower() or "auto"
-    translation.quantization = str(translation.quantization or "auto").strip().lower() or "auto"
+    translation.quantization = (
+        str(translation.quantization or "auto").strip().lower() or "auto"
+    )
     translation.max_new_tokens = int(translation.max_new_tokens or 0)
     translation.keep_loaded_between_files = bool(translation.keep_loaded_between_files)
     translation.offload_after_translate = bool(translation.offload_after_translate)
@@ -861,16 +932,29 @@ def load_pipeline_config_ex(
     if translation.provider == "qwen":
         translation.model_id = "qwen3_8b"
     if not translation.model_id:
-        translation.model_id = legacy_model_id or resolve_default_model_id(languages.src, languages.tgt)
-    if translation.provider and translation.provider not in PUBLIC_TRANSLATION_PROVIDERS:
-        warn(f"[config] Unknown translation.provider='{translation.provider}'. Runtime will report a provider error.")
+        translation.model_id = legacy_model_id or resolve_default_model_id(
+            languages.src, languages.tgt
+        )
+    if (
+        translation.provider
+        and translation.provider not in PUBLIC_TRANSLATION_PROVIDERS
+    ):
+        warn(
+            f"[config] Unknown translation.provider='{translation.provider}'. Runtime will report a provider error."
+        )
 
     try:
-        model_spec = resolve_model_spec(translation.model_id, languages.src, languages.tgt)
+        model_spec = resolve_model_spec(
+            translation.model_id, languages.src, languages.tgt
+        )
     except ValueError:
-        warn(f"[config] Unknown translation.model_id='{translation.model_id}', falling back to default.")
+        warn(
+            f"[config] Unknown translation.model_id='{translation.model_id}', falling back to default."
+        )
         translation.model_id = resolve_default_model_id(languages.src, languages.tgt)
-        model_spec = resolve_model_spec(translation.model_id, languages.src, languages.tgt)
+        model_spec = resolve_model_spec(
+            translation.model_id, languages.src, languages.tgt
+        )
 
     model_status = get_model_status(translation.model_id, languages.src, languages.tgt)
     if str(model_status.reason or "").startswith("unsupported for "):
@@ -903,11 +987,62 @@ def load_pipeline_config_ex(
     loudness_defaults = asdict(AudioMergeLoudnessConfig())
     audio_merge = AudioMergeConfig(
         mode=str(audio_merge_raw.get("mode", AudioMergeConfig().mode)),
-        original_track=str(audio_merge_raw.get("original_track", AudioMergeConfig().original_track)),
-        tts_gain_db=float(audio_merge_raw.get("tts_gain_db", AudioMergeConfig().tts_gain_db)),
-        original_gain_db=float(audio_merge_raw.get("original_gain_db", AudioMergeConfig().original_gain_db)),
-        ducking=AudioMergeDuckingConfig(**(ducking_defaults | {k: v for k, v in ducking_raw.items() if k in ducking_defaults})),
-        loudness=AudioMergeLoudnessConfig(**(loudness_defaults | {k: v for k, v in loudness_raw.items() if k in loudness_defaults})),
+        original_track=str(
+            audio_merge_raw.get("original_track", AudioMergeConfig().original_track)
+        ),
+        tts_gain_db=float(
+            audio_merge_raw.get("tts_gain_db", AudioMergeConfig().tts_gain_db)
+        ),
+        original_gain_db=float(
+            audio_merge_raw.get("original_gain_db", AudioMergeConfig().original_gain_db)
+        ),
+        ducking=AudioMergeDuckingConfig(
+            **(
+                ducking_defaults
+                | {k: v for k, v in ducking_raw.items() if k in ducking_defaults}
+            )
+        ),
+        loudness=AudioMergeLoudnessConfig(
+            **(
+                loudness_defaults
+                | {k: v for k, v in loudness_raw.items() if k in loudness_defaults}
+            )
+        ),
+    )
+
+    source_separation_raw = dict(merged.get("source_separation") or {})
+    command_raw = source_separation_raw.get("command", SourceSeparationConfig().command)
+    if isinstance(command_raw, str):
+        command = [command_raw]
+    elif isinstance(command_raw, list):
+        command = [str(item) for item in command_raw]
+    else:
+        command = []
+    source_separation = SourceSeparationConfig(
+        mode=str(source_separation_raw.get("mode", SourceSeparationConfig().mode))
+        .strip()
+        .lower(),
+        provider=str(
+            source_separation_raw.get("provider", SourceSeparationConfig().provider)
+        )
+        .strip()
+        .lower(),
+        model_path=str(
+            source_separation_raw.get("model_path", SourceSeparationConfig().model_path)
+        ).strip(),
+        command=command,
+        fallback_mode=str(
+            source_separation_raw.get(
+                "fallback_mode", SourceSeparationConfig().fallback_mode
+            )
+        )
+        .strip()
+        .lower(),
+        cache_enabled=bool(
+            source_separation_raw.get(
+                "cache_enabled", SourceSeparationConfig().cache_enabled
+            )
+        ),
     )
 
     # inherit language defaults into mux if user didn't override
@@ -924,7 +1059,11 @@ def load_pipeline_config_ex(
         project_name=str(merged.get("project_name") or "video_sample"),
         project_dir=project_dir,
         mode=str(merged.get("mode") or "Добавление"),
-        usegpu=bool(merged.get("usegpu") if "usegpu" in merged else merged.get("use_gpu", merged.get("usegpu", True))),
+        usegpu=bool(
+            merged.get("usegpu")
+            if "usegpu" in merged
+            else merged.get("use_gpu", merged.get("usegpu", True))
+        ),
         use_existing_subtitles=bool(merged.get("use_existing_subtitles", False)),
         delete_srt=bool(merged.get("delete_srt", merged.get("deleteSRT", True))),
         rebuild=bool(merged.get("rebuild", False)),
@@ -942,6 +1081,7 @@ def load_pipeline_config_ex(
         mux=mux,
         output=output,
         audio_merge=audio_merge,
+        source_separation=source_separation,
     )
 
     info("[dubpipeline] Config loaded (defaults -> yaml -> env -> cli).\n")
@@ -955,7 +1095,7 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     pipeline_path — where to save *.pipeline.yaml
     """
     # Start from template if exists, otherwise defaults
-    template = (Path(__file__).parent / "video.pipeline.yaml")
+    template = Path(__file__).parent / "video.pipeline.yaml"
     if template.exists():
         with template.open("r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f) or {}
@@ -963,8 +1103,12 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     else:
         cfg = copy.deepcopy(DEFAULT_PIPELINE_DICT)
 
-    project_name = values.get("-PROJECT-", "").strip() or cfg.get("project_name", "video_sample")
-    out_dir = values.get("-OUT-", "").strip() or (cfg.get("paths", {}) or {}).get("out_dir", "out")
+    project_name = values.get("-PROJECT-", "").strip() or cfg.get(
+        "project_name", "video_sample"
+    )
+    out_dir = values.get("-OUT-", "").strip() or (cfg.get("paths", {}) or {}).get(
+        "out_dir", "out"
+    )
     source_mode = "dir" if bool(values.get("-SRC_DIR-", False)) else "file"
     if "-INPUT_MODE-" in values:
         source_mode = normalize_input_mode(values.get("-INPUT_MODE-"))
@@ -975,7 +1119,9 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     if not input_path:
         input_path = values.get("-IN-", "").strip()
     if not input_path:
-        input_path = (cfg.get("paths", {}) or {}).get("input_video", "{project_name}.mp4")
+        input_path = (cfg.get("paths", {}) or {}).get(
+            "input_video", "{project_name}.mp4"
+        )
 
     selected_mode = values.get("-MODES-", cfg.get("mode", "Добавление"))
 
@@ -1031,16 +1177,22 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     try:
         model_spec = resolve_model_spec(selected_model_id, src_lang, tgt_lang)
     except ValueError:
-        model_spec = resolve_model_spec(resolve_default_model_id(src_lang, tgt_lang), src_lang, tgt_lang)
+        model_spec = resolve_model_spec(
+            resolve_default_model_id(src_lang, tgt_lang), src_lang, tgt_lang
+        )
 
     cfg.setdefault("translation", {})
-    cfg["translation"]["provider"] = (cfg["translation"].get("provider") or "")
-    cfg["translation"]["model"] = (cfg["translation"].get("model") or "")
-    cfg["translation"]["device"] = (cfg["translation"].get("device") or "auto")
-    cfg["translation"]["dtype"] = (cfg["translation"].get("dtype") or "auto")
-    cfg["translation"]["quantization"] = (cfg["translation"].get("quantization") or "auto")
-    cfg["translation"]["max_new_tokens"] = int(cfg["translation"].get("max_new_tokens") or 0)
-    cfg["translation"]["prompt"] = (cfg["translation"].get("prompt") or "")
+    cfg["translation"]["provider"] = cfg["translation"].get("provider") or ""
+    cfg["translation"]["model"] = cfg["translation"].get("model") or ""
+    cfg["translation"]["device"] = cfg["translation"].get("device") or "auto"
+    cfg["translation"]["dtype"] = cfg["translation"].get("dtype") or "auto"
+    cfg["translation"]["quantization"] = (
+        cfg["translation"].get("quantization") or "auto"
+    )
+    cfg["translation"]["max_new_tokens"] = int(
+        cfg["translation"].get("max_new_tokens") or 0
+    )
+    cfg["translation"]["prompt"] = cfg["translation"].get("prompt") or ""
     cfg["translation"]["keep_loaded_between_files"] = bool(
         cfg["translation"].get("keep_loaded_between_files", True)
     )
@@ -1049,7 +1201,9 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
     )
     cfg["translation"]["model_id"] = model_spec.id
     cfg["translation"]["backend"] = model_spec.backend
-    cfg["translation"]["model_ref"] = cfg["translation"]["model"] or model_spec.model_ref
+    cfg["translation"]["model_ref"] = (
+        cfg["translation"]["model"] or model_spec.model_ref
+    )
 
     # Keep old keys in sync for compatibility with older scripts/tools.
     cfg.setdefault("translate", {})
@@ -1058,9 +1212,13 @@ def save_pipeline_yaml(values, pipeline_path: Path) -> Path:
         cfg["translate"]["hf_model"] = model_spec.model_ref
 
     cfg.setdefault("output", {})
-    cfg["output"]["move_to_dir"] = values.get("-MOVE_TO_DIR-", cfg["output"].get("move_to_dir", ""))
+    cfg["output"]["move_to_dir"] = values.get(
+        "-MOVE_TO_DIR-", cfg["output"].get("move_to_dir", "")
+    )
     cfg["output"]["update_existing_file"] = bool(
-        values.get("-UPDATE_EXISTING_FILE-", cfg["output"].get("update_existing_file", False))
+        values.get(
+            "-UPDATE_EXISTING_FILE-", cfg["output"].get("update_existing_file", False)
+        )
     )
     cfg["output"]["audio_update_mode"] = normalize_audio_update_mode(
         values.get("-MODES-", cfg["output"].get("audio_update_mode", selected_mode))
