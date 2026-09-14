@@ -422,7 +422,12 @@ class AudioMergeConfig:
 class SourceSeparationConfig:
     mode: str = "legacy_ducking"
     provider: str = "bs_roformer"
+    model: str = "model_bs_roformer_ep_368_sdr_12.9628.ckpt"
     model_path: str = ""
+    model_file_dir: str = ""
+    device: str = "auto"
+    output_format: str = "wav"
+    sample_rate: int = 44_100
     command: list[str] = field(default_factory=list)
     fallback_mode: str = "none"
     cache_enabled: bool = True
@@ -1027,9 +1032,33 @@ def load_pipeline_config_ex(
         )
         .strip()
         .lower(),
+        model=str(
+            source_separation_raw.get("model", SourceSeparationConfig().model)
+        ).strip(),
         model_path=str(
             source_separation_raw.get("model_path", SourceSeparationConfig().model_path)
         ).strip(),
+        model_file_dir=str(
+            source_separation_raw.get(
+                "model_file_dir", SourceSeparationConfig().model_file_dir
+            )
+        ).strip(),
+        device=str(source_separation_raw.get("device", SourceSeparationConfig().device))
+        .strip()
+        .lower(),
+        output_format=str(
+            source_separation_raw.get(
+                "output_format", SourceSeparationConfig().output_format
+            )
+        )
+        .strip()
+        .lower(),
+        sample_rate=int(
+            source_separation_raw.get(
+                "sample_rate", SourceSeparationConfig().sample_rate
+            )
+            or SourceSeparationConfig().sample_rate
+        ),
         command=command,
         fallback_mode=str(
             source_separation_raw.get(

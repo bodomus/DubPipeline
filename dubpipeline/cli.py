@@ -625,7 +625,7 @@ def cleanup_garbage(cfg, pipeline_path: Path) -> None:
 
 
 @timed_run(log=info, run_name="RUN", top_n=50)
-def run_pipeline(cfg, pipeline_path: Path) -> None:
+def run_pipeline(cfg, pipeline_path: Path, *, source_separation_provider=None) -> None:
     from dubpipeline.steps import (
         step_align,
         step_merge_py,
@@ -682,6 +682,9 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
         with timed_block("04b_align", log=info):
             step_align.run(c)
 
+    def run_source_separation_step(c) -> None:
+        step_source_separation.run(c, provider=source_separation_provider)
+
     steps: list[tuple[str, bool, Callable]] = [
         ("01_extract_audio", extract_audio_enabled, step_extract_audio.run),
         (
@@ -689,7 +692,7 @@ def run_pipeline(cfg, pipeline_path: Path) -> None:
             bool(cfg.steps.source_separation)
             and str(getattr(cfg.source_separation, "mode", "legacy_ducking"))
             == "separated_background",
-            step_source_separation.run,
+            run_source_separation_step,
         ),
         ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
         ("03_translate", cfg.steps.translate, step_translate.run),
@@ -769,11 +772,22 @@ def main() -> None:
     init_logger(log_path)
 
     try:
+        source_separation_provider = None
+        if len(files) > 1:
+            from dubpipeline.source_separation import create_source_separation_provider
+
+            source_separation_provider = create_source_separation_provider(cfg)
         for input_file in files:
             run_cfg = _build_cfg_for_input(cfg, input_file)
             Const.bind(run_cfg)
-            run_pipeline(run_cfg, pipeline_path)
+            run_pipeline(
+                run_cfg,
+                pipeline_path,
+                source_separation_provider=source_separation_provider,
+            )
     finally:
+        if "source_separation_provider" in locals() and source_separation_provider:
+            source_separation_provider.close()
         if len(files) > 1:
             from dubpipeline.translation.service import TranslatorService
 

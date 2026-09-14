@@ -249,6 +249,39 @@ calls. For folder runs, DubPipeline can keep the CPU-side model cache between fi
 from CUDA after translation so XTTS does not share VRAM with Qwen. Use `translation.device=cpu` only
 deliberately; `translation.device=cuda` fails clearly when CUDA is unavailable.
 
+## Source Separation
+
+Source separation is disabled by default through `source_separation.mode: legacy_ducking`.
+The DUB-84 command-template provider remains available as `provider: bs_roformer`.
+
+The native headless provider uses the Python API from `audio-separator`:
+
+```yaml
+source_separation:
+  mode: separated_background
+  provider: audio_separator
+  model: model_bs_roformer_ep_368_sdr_12.9628.ckpt
+  model_path: ''
+  model_file_dir: ''
+  device: auto
+  output_format: wav
+  sample_rate: 44100
+  cache_enabled: true
+  fallback_mode: legacy_ducking
+```
+
+`device: auto` uses CUDA when `usegpu: true` and CUDA is available; otherwise set
+`device: cpu` deliberately. With `device: cuda`, CUDA initialization failures are explicit
+unless `fallback_mode: legacy_ducking` is configured.
+
+For managed models, set `model` to the `audio-separator` model filename. For an explicit
+local checkpoint, set `model_path`; DubPipeline will use that file name and directory and
+will not silently substitute a managed model. Output stems are always normalized to
+`separation/<project_name>/vocals.wav` and `separation/<project_name>/background.wav`.
+
+In `--in-dir` runs, the native provider is retained for the process and loads the model
+lazily on the first cache miss, then reuses it for subsequent input files.
+
 ## Target-Aware Outputs
 
 - Translated segments are written to `*.segments.{target_lang}.json`.
