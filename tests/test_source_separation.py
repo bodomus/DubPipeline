@@ -289,6 +289,8 @@ class FakeSeparator:
     fail_separate = False
     omit_vocals = False
     omit_background = False
+    use_instvoc_names = False
+    reverse_outputs = False
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -301,23 +303,29 @@ class FakeSeparator:
         if FakeSeparator.fail_load:
             raise RuntimeError("load failed")
         self.loaded_models.append(model_filename)
+        self.model_instance = type("FakeModelInstance", (), {})()
+        self.model_instance.output_dir = self.output_dir
 
     def separate(self, input_audio):
         if FakeSeparator.fail_separate:
             raise RuntimeError("separation failed")
         self.separated_inputs.append(input_audio)
-        out_dir = Path(self.output_dir)
+        out_dir = Path(self.model_instance.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         outputs = []
         if not FakeSeparator.omit_background:
-            background = out_dir / f"{Path(input_audio).stem}_(Instrumental).wav"
+            model_suffix = "_BS_Roformer_InstVoc_2" if FakeSeparator.use_instvoc_names else ""
+            background = out_dir / (
+                f"{Path(input_audio).stem}_(Instrumental){model_suffix}.wav"
+            )
             _write(background, b"background")
             outputs.append(background.name)
         if not FakeSeparator.omit_vocals:
-            vocals = out_dir / f"{Path(input_audio).stem}_(Vocals).wav"
+            model_suffix = "_BS_Roformer_InstVoc_2" if FakeSeparator.use_instvoc_names else ""
+            vocals = out_dir / f"{Path(input_audio).stem}_(Vocals){model_suffix}.wav"
             _write(vocals, b"vocals")
             outputs.append(vocals.name)
-        return outputs
+        return list(reversed(outputs)) if FakeSeparator.reverse_outputs else outputs
 
 
 class AudioSeparatorProviderTests(unittest.TestCase):
@@ -327,6 +335,8 @@ class AudioSeparatorProviderTests(unittest.TestCase):
         FakeSeparator.fail_separate = False
         FakeSeparator.omit_vocals = False
         FakeSeparator.omit_background = False
+        FakeSeparator.use_instvoc_names = False
+        FakeSeparator.reverse_outputs = False
 
     def _config(self, root: Path, *, fallback: str = "none", device: str = "cpu"):
         project = root / "project"
@@ -383,6 +393,8 @@ source_separation:
                 ["model_bs_roformer_ep_368_sdr_12.9628.ckpt"],
             )
             self.assertEqual(len(FakeSeparator.instances[0].separated_inputs), 2)
+            self.assertTrue(Path(second_cfg.paths.separation_vocals_wav).is_file())
+            self.assertTrue(Path(second_cfg.paths.separation_background_wav).is_file())
             provider.close()
 
     def test_cache_hit_skips_native_model_initialization(self):
@@ -416,6 +428,28 @@ source_separation:
             self.assertEqual(
                 Path(cfg.paths.separation_background_wav).read_bytes(), b"background"
             )
+
+    def test_instvoc_model_name_does_not_confuse_stem_mapping_in_either_order(self):
+        for reverse_outputs in (False, True):
+            with self.subTest(reverse_outputs=reverse_outputs):
+                with tempfile.TemporaryDirectory() as tmp:
+                    FakeSeparator.use_instvoc_names = True
+                    FakeSeparator.reverse_outputs = reverse_outputs
+                    cfg = self._config(Path(tmp))
+
+                    result = run_source_separation(
+                        cfg,
+                        provider=AudioSeparatorProvider(separator_factory=FakeSeparator),
+                    )
+
+                    self.assertIsNotNone(result)
+                    self.assertEqual(
+                        Path(cfg.paths.separation_vocals_wav).read_bytes(), b"vocals"
+                    )
+                    self.assertEqual(
+                        Path(cfg.paths.separation_background_wav).read_bytes(),
+                        b"background",
+                    )
 
     def test_native_load_failure_honors_legacy_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

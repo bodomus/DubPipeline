@@ -282,6 +282,12 @@ will not silently substitute a managed model. Output stems are always normalized
 In `--in-dir` runs, the native provider is retained for the process and loads the model
 lazily on the first cache miss, then reuses it for subsequent input files.
 
+The dependency set pins `audio-separator[cpu]==0.47.0` with CPU-only
+`onnxruntime==1.23.2`. The managed BS-RoFormer `.ckpt` model runs on CUDA through the
+project's pinned PyTorch `2.6.0+cu124`; it does not use the ONNX Runtime execution
+provider. Do not replace these pins with `audio-separator[gpu]`: current GPU extras can
+resolve to CUDA 13 ONNX Runtime wheels and destabilize the CUDA 12.4 environment.
+
 ## Target-Aware Outputs
 
 - Translated segments are written to `*.segments.{target_lang}.json`.

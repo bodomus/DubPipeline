@@ -4,117 +4,182 @@ Issue: https://bodomus.youtrack.cloud/issue/DUB-85/Native-Headless-Source-Separa
 
 Branch: `codex/DUB-85-native-headless-source-separation-provider`
 
-Base commit: `f056c0c6c961845284dc98b902978ed47362e364`
+Corrective-pass baseline: `b7a37eb9bab4cbefc4fb63fb288effbcd94ac576`
 
-## Summary
+## Final verdict
 
-Implemented a native headless source separation provider using the `audio-separator`
-Python API while preserving the existing DUB-84 command-template provider and legacy
-ducking behavior.
+**READY FOR REVIEW**
 
-The new provider is selected with:
+The dependency/CUDA mismatch, real batch reuse blocker, ambiguous `InstVoc` stem
+classification, unrelated text fixture, and stem-quality investigation are resolved.
 
-```yaml
-source_separation:
-  mode: separated_background
-  provider: audio_separator
-  model: model_bs_roformer_ep_368_sdr_12.9628.ckpt
-  device: auto
+## Final dependency and CUDA state
+
+`requirements.txt` now pins:
+
+```text
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+audio-separator[cpu]==0.47.0
+onnxruntime==1.23.2
+numpy==2.0.2
 ```
 
-## Done
+Validated in the repository `.venv`:
 
-- Added native `audio_separator` provider with lazy model initialization.
-- Reused one native provider instance across `--in-dir` runs so the model can stay
-  loaded for multiple files.
-- Preserved cache-before-model-load behavior: cache hits do not import or initialize
-  `audio-separator`.
-- Added explicit `cuda`, `cpu`, and `auto` device handling.
-- Added deterministic output normalization to existing DUB-84 paths:
-  `vocals.wav`, `background.wav`, and `metadata.json`.
-- Added metadata schema version 2 with native provider parameters.
-- Added explicit error handling for missing native dependency, model load failures,
-  separation failures, missing vocals stem, and missing background/instrumental stem.
-- Preserved `fallback_mode: legacy_ducking` for dependency/model-load/runtime failures.
-- Added config fields: `model`, `model_file_dir`, `device`, `output_format`, and
-  `sample_rate`.
-- Added `audio-separator[gpu]` to `requirements.txt`.
-- Documented native provider usage in `README.md`.
-- Saved ticket/preflight artifacts:
-  - `Tickets/DUB-85.md`
-  - `Tickets/DUB-85-investigation.md`
-  - `Tickets/DUB-85-implementation-plan.md`
+```text
+torch=2.6.0+cu124
+torch_cuda=12.4
+cuda_available=True
+audio_separator=0.47.0
+onnxruntime=1.23.2
+onnxruntime providers=AzureExecutionProvider,CPUExecutionProvider
+onnxruntime-gpu installed=False
+pip check: No broken requirements found.
+```
 
-## Files Changed
+The managed BS-RoFormer checkpoint is an MDXC/RoFormer `.ckpt` model and performs
+inference through PyTorch. It does not require the ONNX Runtime CUDA execution provider.
+The CPU extra is intentional: it satisfies audio-separator's ONNX Runtime import without
+installing a CUDA-13 `onnxruntime-gpu` wheel into the CUDA-12.4 PyTorch environment.
 
-- `dubpipeline/source_separation.py`
-- `dubpipeline/config.py`
-- `dubpipeline/cli.py`
-- `dubpipeline/steps/step_source_separation.py`
-- `tests/test_source_separation.py`
-- `requirements.txt`
-- `README.md`
-- `Tickets/DUB-85.md`
-- `Tickets/DUB-85-investigation.md`
-- `Tickets/DUB-85-implementation-plan.md`
+`audio-separator` logs that its ONNX execution provider is CPU-only. During the same run
+it reports CUDA available in Torch, and both `Separator.torch_device` and the loaded
+MDXC model's `torch_device` were `cuda`. There was no CUDA-13 DLL load failure.
+
+## Code corrections
+
+- Removed broad background substring `inst` from stem classification.
+- Added boundary-aware explicit roles for `Vocals`, `Instrumental`, `No Vocals`,
+  `Background`, `Karaoke`, and `Accompaniment`.
+- Background semantics are evaluated before the generic vocals marker, so `No Vocals`
+  cannot be classified as vocals.
+- Added regression coverage for exact examples:
+  - `en_710_760_(Vocals)_BS_Roformer_InstVoc_2.wav`;
+  - `en_710_760_(Instrumental)_BS_Roformer_InstVoc_2.wav`;
+  - both normal and reversed returned output ordering.
+- Propagated each request's output directory into the retained
+  `Separator.model_instance`. Previously the outer separator changed directories while
+  the loaded model kept the first file's directory.
+- Preserved `OriginalAudioBackgroundProvider`, `BsRoformerProvider`,
+  `AudioSeparatorProvider`, lazy loading, run-scoped reuse, DUB-84 cache/fallback
+  behavior, and canonical artifacts.
+- Removed unrelated `tests/TXT/1.txt` from the final working-tree diff against `master`.
+
+## Exact model relationship
+
+Successful validation used:
+
+```text
+model_bs_roformer_ep_368_sdr_12.9628.ckpt
+audio-separator friendly name: BS-Roformer-Viperx-1296
+size: 639,317,465 bytes
+MD5: 40780DD7FB1EF17D368A2499CE07A55E
+```
+
+The managed checkpoint is byte-identical to the locally installed UVR file
+`BS Roformer - InstVoc 1.ckpt` (same size and MD5).
+
+It is **not** identical to the previously tested `BS Roformer - InstVoc 2.ckpt`:
+
+```text
+size: 639,331,213 bytes
+MD5: 261E8988646EC49498E46FDAF97F0703
+```
+
+The two are related BS-RoFormer/InstVoc-style models, but they are distinct checkpoints.
+
+## Real single-file and stem inspection
+
+Input: `tests/Test_for_SPLIT/en_710_760.wav`.
+
+The real CUDA run generated explicit raw and canonical stems. Hash comparison proves
+the mapping rather than relying on output order:
+
+```text
+canonical vocals.wav SHA256:
+1B5392726787BE331750DFE1266F84843799079CBC8EE12B7B79E2864C6E859D
+raw (Vocals) SHA256:
+1B5392726787BE331750DFE1266F84843799079CBC8EE12B7B79E2864C6E859D
+
+canonical background.wav SHA256:
+4DB6146D984FC53F82E40A752B17CD7747DD5421C5C3B8EF9831FFA32F6B4815
+raw (Instrumental) SHA256:
+4DB6146D984FC53F82E40A752B17CD7747DD5421C5C3B8EF9831FFA32F6B4815
+```
+
+FFprobe/FFmpeg inspection:
+
+| File | Duration | Rate/channels | Mean | Peak |
+| --- | ---: | --- | ---: | ---: |
+| source | 50.0 s | 44.1 kHz stereo | -20.0 dB | 0.0 dB |
+| vocals | 50.0 s | 44.1 kHz stereo | -20.9 dB | -0.9 dB |
+| background | 50.0 s | 44.1 kHz stereo | -52.6 dB | -26.3 dB |
+
+The review's “nearly silent vocals” observation was a role interpretation problem, not
+the current output. The nearly silent file is the explicit `(Instrumental)`/background
+stem. This source is speech-dominant, so the model places almost all energy into the
+explicit `(Vocals)` stem; vocals are only 0.9 dB below source mean level, while the
+background is 31.7 dB below vocals. The stems are not reversed.
+
+## Real same-process batch validation
+
+Inputs:
+
+1. original 50-second `en_710_760.wav`;
+2. a different valid 10-second excerpt beginning at 30 seconds.
+
+Observed lifecycle:
+
+```text
+successful Separator constructions: 1
+load_model calls: 1
+separate calls: 2
+separator device: cuda
+model device: cuda
+provider_closed: True
+process exit: clean
+```
+
+The first separation completed in about 9 seconds after a 2-second model load; the
+second completed in under one second. Both files wrote raw and canonical stems into
+their own directories. No hang occurred.
+
+A new provider was then passed the first configuration with cache enabled. It returned
+`cache_hit=True`; construction/load/separation counts remained `1/1/2`, proving the
+DUB-84 cache path does not initialize the model.
 
 ## Validation
 
-- `python -m unittest discover -s tests -p "test_source_separation.py"`:
-  22 tests passed.
-- `python -m unittest discover -s tests -p "test_step_merge_hq.py"`:
-  6 tests passed.
-- `python -m unittest discover -s tests -p "test_cli.py"`:
-  35 tests passed.
+- `python -m unittest discover -s tests -p "test_source_separation.py"`: 23 passed.
+- `python -m unittest discover -s tests -p "test_step_merge_hq.py"`: 6 passed.
+- `python -m unittest discover -s tests -p "test_cli.py"`: 35 passed.
+- Production Python files compiled with `python -m py_compile`: passed.
 - `python -m dubpipeline.cli --help`: passed.
-- `python -m dubpipeline.cli speak --text "Тест" --out-audio tmp_unittest_speak.wav --plan`:
-  passed.
-- `python -m dubpipeline.cli run dubpipeline\video.pipeline.yaml --in-file tests\Test_for_SPLIT\en_710_760.wav --set source_separation.mode=separated_background --set source_separation.provider=audio_separator --set source_separation.device=cuda --plan`:
-  passed; plan mode did not load the native model.
-- Real native separation on `tests\Test_for_SPLIT\en_710_760.wav`:
-  passed, generated valid 44.1 kHz stereo WAV stems, both 50.0 seconds.
-- Native cache-hit rerun:
-  passed, returned from metadata/stems without model initialization.
-- Post-change CRG update:
-  passed with `PYTHONIOENCODING=utf-8`.
-- Post-change Graphify refresh:
-  passed.
+- Native-provider `run ... --plan`: passed; no audio-separator import/model load occurred.
+- Exact dependency/import/CUDA checks: passed.
+- `pip check`: passed with no broken requirements.
+- Real single-file CUDA separation: passed.
+- Real two-file, one-process CUDA batch: passed with one model load.
+- Cache-hit rerun: passed without model construction/load.
+- FFprobe, volume, and hash-based stem inspection: passed.
+- Post-change `code-review-graph update --brief --base master`: passed; 15 branch
+  files analyzed, no affected flows reported. Focused reverse traversal confirmed the
+  expected provider -> source-separation step -> CLI path and merge/test consumers.
+- Graphify was queried before and after implementation. A full refresh was not needed
+  because this corrective pass changes no module, provider, step, or orchestration
+  relationship.
 
-`python -m pytest ...` was attempted but pytest is not installed in the active
-environment, so focused tests were run through `unittest`.
+`pytest` is not installed in this repository environment, so the repository's existing
+`unittest` suites were used directly.
 
-## Runtime Notes
+## Remaining limitations
 
-- Active environment has `torch 2.5.1+cu121`; the project instructions mention
-  `torch 2.6.0+cu124`.
-- Installing `audio-separator[gpu]` installed `audio-separator 0.47.0` and
-  `onnxruntime-gpu 1.29.0`.
-- Pip reported dependency conflicts:
-  - `py-key-value-aio 0.4.5` requires `beartype>=0.20.0`, while
-    `audio-separator` installed `beartype 0.18.5`.
-  - `thinc 8.3.2` requires `numpy<2.1.0,>=2.0.0`, while the environment now has
-    `numpy 2.1.3`.
-- Real CUDA separation emitted an ONNX Runtime warning because installed
-  `onnxruntime-gpu 1.29.0` expects CUDA 13 DLLs while PyTorch uses CUDA 12.1.
-  RoFormer still loaded and the real single-file separation completed.
-- Additional two-input same-process native runtime validation was attempted after the
-  successful single-file run. It loaded the cached model once, but then stopped
-  producing progress during the first separation and was interrupted after several
-  minutes. Unit coverage verifies provider reuse, but the local GPU/ONNX runtime stack
-  should be normalized before treating batch runtime behavior as production-validated.
-- The real separated stems were structurally valid. `ffmpeg astats` showed the vocals
-  stem was nearly silent on this sample; no previous UVR reference output was found in
-  the repository for qualitative comparison.
-- `git status` emits permission warnings for pre-existing `.codex_tmp` and
-  `tests/.tmp_runtime` directories. A few `tmp_unittest/tmp*` temp directories created
-  during validation also remain inaccessible to the current process and could not be
-  removed.
-
-## Remaining Risks
-
-- Native provider behavior depends on the installed `audio-separator`/ONNX/Torch CUDA
-  compatibility matrix.
-- Batch same-process real GPU runtime needs another validation pass after the CUDA/ONNX
-  environment mismatch is resolved.
-- Manual auditory comparison against Ultimate Vocal Remover output was not completed
-  because no matching baseline output was available in the repository.
+- CPU-only ONNX Runtime intentionally cannot accelerate ONNX-format separation models.
+  DUB-85's managed RoFormer `.ckpt` remains CUDA-accelerated through PyTorch.
+- `audio-separator` emits a generic warning that ONNX Runtime lacks CUDA support even
+  for the PyTorch RoFormer path; device inspection confirms this run used CUDA.
+- Objective metadata, hashes, and signal levels were inspected. Interactive human
+  listening is still a useful optional subjective check, but no qualitative listening
+  claim is needed to establish role correctness.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -617,9 +618,15 @@ def _cuda_available() -> bool:
 
 
 def _set_separator_output_dir(separator: object, output_dir: Path) -> None:
-    for attr in ("output_dir", "output_directory"):
-        if hasattr(separator, attr):
-            setattr(separator, attr, str(output_dir))
+    output_dir_value = str(output_dir)
+    targets = [separator]
+    model_instance = getattr(separator, "model_instance", None)
+    if model_instance is not None:
+        targets.append(model_instance)
+    for target in targets:
+        for attr in ("output_dir", "output_directory"):
+            if hasattr(target, attr):
+                setattr(target, attr, output_dir_value)
 
 
 def _apply_separator_device(separator: object, device: str) -> None:
@@ -678,25 +685,26 @@ def _output_candidates(request: SourceSeparationRequest, produced: object) -> li
 
 def _find_stem_candidate(candidates: Sequence[Path], *, wanted: str) -> Path | None:
     for candidate in candidates:
-        normalized = candidate.stem.lower().replace(" ", "_").replace("-", "_")
-        if wanted == "vocals":
-            if "no_vocal" in normalized or "instrumental" in normalized:
-                continue
-            if "vocal" in normalized:
-                return candidate
-        else:
-            background_tokens = (
-                "instrumental",
-                "instrument",
-                "background",
-                "no_vocal",
-                "novocal",
-                "karaoke",
-                "accompaniment",
-                "inst",
-            )
-            if any(token in normalized for token in background_tokens):
-                return candidate
+        if _stem_role(candidate) == wanted:
+            return candidate
+    return None
+
+
+def _stem_role(candidate: Path) -> str | None:
+    normalized = re.sub(r"[^a-z0-9]+", " ", candidate.stem.lower()).strip()
+    background_markers = (
+        r"\bno\s+vocals?\b",
+        r"\bnovocals?\b",
+        r"\binstrumentals?\b",
+        r"\binstruments?\b",
+        r"\bbackground\b",
+        r"\bkaraoke\b",
+        r"\baccompaniment\b",
+    )
+    if any(re.search(marker, normalized) for marker in background_markers):
+        return "background"
+    if re.search(r"\bvocals?\b", normalized):
+        return "vocals"
     return None
 
 

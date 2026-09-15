@@ -14,7 +14,10 @@ pyannote.audio==3.4.0
 # --- Audio / обработка ---
 ffmpeg-python==0.2.0
 soundfile==0.12.1
-audio-separator[gpu]
+# RoFormer .ckpt models use PyTorch CUDA. Keep ONNX Runtime CPU-only so the
+# audio-separator import works without pulling a CUDA-13 onnxruntime-gpu wheel.
+audio-separator[cpu]==0.47.0
+onnxruntime==1.23.2
 # --- Утилиты ---
 numpy==2.0.2
 tqdm==4.66.4
