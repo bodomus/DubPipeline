@@ -8,6 +8,8 @@ This file defines the mandatory repository-intelligence workflow that must run *
 
 The repository uses two complementary code intelligence systems:
 
+Before producing any progress, command, or status output, follow the rules defined in `output.md` located in the same directory as this file.
+
 1. **Graphify**
    - architecture and subsystem exploration;
    - concept relationships;
