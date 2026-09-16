@@ -36,6 +36,7 @@ from .config import (
 STEP_ID_TO_CFG_FIELD = {
     "extract_audio": "extract_audio",
     "source_separation": "source_separation",
+    "residual_suppression": "residual_suppression",
     "asr": "asr_whisperx",
     "translate": "translate",
     "tts": "tts",
@@ -45,6 +46,7 @@ STEP_ID_TO_CFG_FIELD = {
 STEP_ID_TO_INTERNAL = {
     "extract_audio": "01_extract_audio",
     "source_separation": "01b_source_separation",
+    "residual_suppression": "01c_residual_suppression",
     "asr": "02_asr_whisperx",
     "translate": "03_translate",
     "tts": "04_tts+align",
@@ -484,6 +486,16 @@ def _format_steps(cfg: PipelineConfig) -> list[str]:
                 )
             )
             enabled = enabled and sep_mode == "separated_background"
+        elif step_id == "residual_suppression":
+            sep_mode = str(
+                getattr(
+                    getattr(cfg, "source_separation", None), "mode", "legacy_ducking"
+                )
+            )
+            suppression_enabled = bool(
+                getattr(getattr(cfg, "residual_suppression", None), "enabled", False)
+            )
+            enabled = enabled and sep_mode == "separated_background" and suppression_enabled
         status = "enabled" if enabled else "disabled"
         rows.append(f"  - {step_id} ({STEP_ID_TO_INTERNAL[step_id]}): {status}")
     return rows
@@ -572,6 +584,12 @@ def _build_cfg_for_input(base_cfg: PipelineConfig, input_file: Path) -> Pipeline
     cfg.paths.separation_vocals_wav = cfg.paths.separation_dir / "vocals.wav"
     cfg.paths.separation_background_wav = cfg.paths.separation_dir / "background.wav"
     cfg.paths.separation_metadata_json = cfg.paths.separation_dir / "metadata.json"
+    cfg.paths.separation_cleaned_background_wav = (
+        cfg.paths.separation_dir / "background.cleaned.wav"
+    )
+    cfg.paths.residual_suppression_metadata_json = (
+        cfg.paths.separation_dir / "residual_suppression.json"
+    )
     cfg.paths.segments_file = out_dir / f"{cfg.project_name}.segments.json"
     cfg.paths.segments_tgt_file = (
         out_dir / f"{cfg.project_name}.segments.{target_lang}.json"
@@ -634,7 +652,11 @@ def run_pipeline(cfg, pipeline_path: Path, *, source_separation_provider=None) -
         step_whisperx,
     )
     from dubpipeline.translation.service import TranslationModelError, TranslatorService
-    from .steps import step_extract_audio, step_source_separation
+    from .steps import (
+        step_extract_audio,
+        step_residual_suppression,
+        step_source_separation,
+    )
 
     Const.bind(cfg)
     device = cfg.device
@@ -693,6 +715,14 @@ def run_pipeline(cfg, pipeline_path: Path, *, source_separation_provider=None) -
             and str(getattr(cfg.source_separation, "mode", "legacy_ducking"))
             == "separated_background",
             run_source_separation_step,
+        ),
+        (
+            "01c_residual_suppression",
+            bool(cfg.steps.residual_suppression)
+            and str(getattr(cfg.source_separation, "mode", "legacy_ducking"))
+            == "separated_background"
+            and bool(getattr(cfg.residual_suppression, "enabled", False)),
+            step_residual_suppression.run,
         ),
         ("02_asr_whisperx", cfg.steps.asr_whisperx, step_whisperx.run),
         ("03_translate", cfg.steps.translate, step_translate.run),

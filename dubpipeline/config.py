@@ -166,6 +166,7 @@ def normalize_input_mode(value: str | None) -> str:
 class StepsConfig:
     extract_audio: bool = True
     source_separation: bool = True
+    residual_suppression: bool = True
     asr_whisperx: bool = True
     translate: bool = True
     tts: bool = True
@@ -182,6 +183,12 @@ class PathsTemplatesConfig:
         "{out_dir}/separation/{project_name}/background.wav"
     )
     separation_metadata_json: str = "{out_dir}/separation/{project_name}/metadata.json"
+    separation_cleaned_background_wav: str = (
+        "{out_dir}/separation/{project_name}/background.cleaned.wav"
+    )
+    residual_suppression_metadata_json: str = (
+        "{out_dir}/separation/{project_name}/residual_suppression.json"
+    )
     segments_json: str = "{out_dir}/{project_name}.segments.json"
     segments_tgt_json: str = "{out_dir}/{project_name}.segments.{target_lang}.json"
     srt_en: str = "{out_dir}/{project_name}.srt"
@@ -214,6 +221,8 @@ class PathsConfig:
     separation_vocals_wav: Path = Path()
     separation_background_wav: Path = Path()
     separation_metadata_json: Path = Path()
+    separation_cleaned_background_wav: Path = Path()
+    residual_suppression_metadata_json: Path = Path()
     segments_file: Path = Path()
     segments_ru_file: Path = Path()
     srt_file_en: Path = Path()
@@ -434,6 +443,19 @@ class SourceSeparationConfig:
 
 
 @dataclass
+class ResidualSuppressionConfig:
+    enabled: bool = False
+    threshold_db: float = -35.0
+    ratio: float = 6.0
+    attack_ms: int = 10
+    release_ms: int = 250
+    max_reduction_db: float = 12.0
+    control_gain_db: float = 0.0
+    knee: float = 2.828427
+    cache_enabled: bool = True
+
+
+@dataclass
 class PipelineConfig:
     # general
     project_name: str
@@ -461,6 +483,9 @@ class PipelineConfig:
     audio_merge: AudioMergeConfig = field(default_factory=AudioMergeConfig)
     source_separation: SourceSeparationConfig = field(
         default_factory=SourceSeparationConfig
+    )
+    residual_suppression: ResidualSuppressionConfig = field(
+        default_factory=ResidualSuppressionConfig
     )
 
     @property
@@ -514,6 +539,7 @@ DEFAULT_PIPELINE_DICT: Dict[str, Any] = {
     },
     "audio_merge": asdict(AudioMergeConfig()),
     "source_separation": asdict(SourceSeparationConfig()),
+    "residual_suppression": asdict(ResidualSuppressionConfig()),
 }
 
 
@@ -590,6 +616,7 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "MUX": "mux",
         "AMR": "audio_merge",
         "SEP": "source_separation",
+        "RSP": "residual_suppression",
         "STP": "steps",
     }
 
@@ -639,6 +666,15 @@ def _env_to_overrides(environ: dict[str, str] | None = None) -> Dict[str, Any]:
         "DUBPIPELINE_SOURCE_SEPARATION_MODEL_PATH": "source_separation.model_path",
         "DUBPIPELINE_SOURCE_SEPARATION_FALLBACK_MODE": "source_separation.fallback_mode",
         "DUBPIPELINE_SOURCE_SEPARATION_CACHE_ENABLED": "source_separation.cache_enabled",
+        # Residual suppression
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_ENABLED": "residual_suppression.enabled",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_THRESHOLD_DB": "residual_suppression.threshold_db",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_RATIO": "residual_suppression.ratio",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_ATTACK_MS": "residual_suppression.attack_ms",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_RELEASE_MS": "residual_suppression.release_ms",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_MAX_REDUCTION_DB": "residual_suppression.max_reduction_db",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_CONTROL_GAIN_DB": "residual_suppression.control_gain_db",
+        "DUBPIPELINE_RESIDUAL_SUPPRESSION_CACHE_ENABLED": "residual_suppression.cache_enabled",
         # Existing subtitles mode
         "DUBPIPELINE_USE_EXISTING_SUBTITLES": "use_existing_subtitles",
     }
@@ -827,6 +863,12 @@ def _resolve_paths(
         separation_vocals_wav=_p(merged_tmpl["separation_vocals_wav"]),
         separation_background_wav=_p(merged_tmpl["separation_background_wav"]),
         separation_metadata_json=_p(merged_tmpl["separation_metadata_json"]),
+        separation_cleaned_background_wav=_p(
+            merged_tmpl["separation_cleaned_background_wav"]
+        ),
+        residual_suppression_metadata_json=_p(
+            merged_tmpl["residual_suppression_metadata_json"]
+        ),
         segments_file=_p(merged_tmpl["segments_json"]),
         segments_ru_file=_p(merged_tmpl["segments_tgt_json"]),
         srt_file_en=_p(merged_tmpl["srt_en"]),
@@ -1074,6 +1116,32 @@ def load_pipeline_config_ex(
         ),
     )
 
+    residual_raw = dict(merged.get("residual_suppression") or {})
+    residual_defaults = ResidualSuppressionConfig()
+    residual_suppression = ResidualSuppressionConfig(
+        enabled=bool(residual_raw.get("enabled", residual_defaults.enabled)),
+        threshold_db=float(
+            residual_raw.get("threshold_db", residual_defaults.threshold_db)
+        ),
+        ratio=float(residual_raw.get("ratio", residual_defaults.ratio)),
+        attack_ms=int(residual_raw.get("attack_ms", residual_defaults.attack_ms)),
+        release_ms=int(
+            residual_raw.get("release_ms", residual_defaults.release_ms)
+        ),
+        max_reduction_db=float(
+            residual_raw.get(
+                "max_reduction_db", residual_defaults.max_reduction_db
+            )
+        ),
+        control_gain_db=float(
+            residual_raw.get("control_gain_db", residual_defaults.control_gain_db)
+        ),
+        knee=float(residual_raw.get("knee", residual_defaults.knee)),
+        cache_enabled=bool(
+            residual_raw.get("cache_enabled", residual_defaults.cache_enabled)
+        ),
+    )
+
     # inherit language defaults into mux if user didn't override
     default_mux = MuxConfig()
     if not mux.orig_lang or mux.orig_lang == default_mux.orig_lang:
@@ -1111,6 +1179,7 @@ def load_pipeline_config_ex(
         output=output,
         audio_merge=audio_merge,
         source_separation=source_separation,
+        residual_suppression=residual_suppression,
     )
 
     info("[dubpipeline] Config loaded (defaults -> yaml -> env -> cli).\n")

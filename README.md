@@ -150,6 +150,8 @@ DUBPIPELINE_WHISPERX_DANGLING_MAX_NEXT_WORDS=6
 
 Допустимые canonical id шагов для `--steps`:
 - `extract_audio` → `01_extract_audio`
+- `source_separation` → `01b_source_separation`
+- `residual_suppression` → `01c_residual_suppression`
 - `asr` → `02_asr_whisperx`
 - `translate` → `03_translate`
 - `tts` → `04_tts+align`
@@ -287,6 +289,40 @@ The dependency set pins `audio-separator[cpu]==0.47.0` with CPU-only
 project's pinned PyTorch `2.6.0+cu124`; it does not use the ONNX Runtime execution
 provider. Do not replace these pins with `audio-separator[gpu]`: current GPU extras can
 resolve to CUDA 13 ONNX Runtime wheels and destabilize the CUDA 12.4 environment.
+
+## Residual English Suppression
+
+Residual suppression is disabled by default and is active only with
+`source_separation.mode: separated_background`. It uses canonical `vocals.wav` as
+the FFmpeg sidechain control signal, attenuates `background.wav`, and writes
+`background.cleaned.wav` before the RU TTS mix:
+
+```yaml
+steps:
+  source_separation: true
+  residual_suppression: true
+
+source_separation:
+  mode: separated_background
+  fallback_mode: legacy_ducking
+
+residual_suppression:
+  enabled: true
+  threshold_db: -35.0
+  ratio: 6.0
+  attack_ms: 10
+  release_ms: 250
+  max_reduction_db: 12.0
+  control_gain_db: 0.0
+  knee: 2.828427
+  cache_enabled: true
+```
+
+The cleaned-background cache is independent from source separation. Tuning changes
+rebuild only `background.cleaned.wav`, never BS-RoFormer stems. With
+`fallback_mode: legacy_ducking`, a suppression failure selects the existing original-audio
+ducking path; `fallback_mode: none` raises an explicit error. FFmpeg's dry/wet compressor
+mix preserves inactive background and caps attenuation at `max_reduction_db`.
 
 ## Target-Aware Outputs
 

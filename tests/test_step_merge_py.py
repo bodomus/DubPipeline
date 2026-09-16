@@ -51,12 +51,17 @@ class StepMergePyTests(unittest.TestCase):
         cfg.paths.audio_wav.write_text("audio", encoding="utf-8")
 
         mux_temp_out = root / "input.tmp.muxed.mp4"
+        cleaned_background = root / "background.cleaned.wav"
         expected_mix_path = Path(cfg.paths.out_dir) / f"{cfg.paths.input_video.stem}.hq_mix.m4a"
 
         with (
             patch(
                 "dubpipeline.steps.step_merge_py.merge_hq_config_from_pipeline",
                 return_value=(object(), "auto"),
+            ),
+            patch(
+                "dubpipeline.steps.step_merge_py.resolve_background_for_merge",
+                return_value=cleaned_background,
             ),
             patch("dubpipeline.steps.step_merge_py.render_hq_mix_audio") as render_hq_mix_audio,
             patch("dubpipeline.steps.step_merge_py.mux_smart") as mux_smart,
@@ -72,6 +77,10 @@ class StepMergePyTests(unittest.TestCase):
         make_temp_path.assert_called_once_with(cfg.paths.input_video)
         render_hq_mix_audio.assert_called_once()
         self.assertEqual(render_hq_mix_audio.call_args.kwargs["out_audio"], expected_mix_path)
+        self.assertEqual(
+            render_hq_mix_audio.call_args.kwargs["background_wav"],
+            cleaned_background,
+        )
 
         mux_call = mux_smart.call_args
         self.assertIsNotNone(mux_call)

@@ -20,10 +20,22 @@ paths:
   final_video: J:\Projects\!!!AI\DubPipeline\tests\output/1. Simple Opaque Water.{target_lang}.muxed.mp4
 steps:
   extract_audio: true
+  source_separation: true
+  residual_suppression: true
   asr_whisperx: true
   translate: true
   tts: true
   merge: true
+residual_suppression:
+  enabled: false
+  threshold_db: -35.0
+  ratio: 6.0
+  attack_ms: 10
+  release_ms: 250
+  max_reduction_db: 12.0
+  control_gain_db: 0.0
+  knee: 2.828427
+  cache_enabled: true
 output:
   move_to_dir: E:/Lessons/UE
 tts:

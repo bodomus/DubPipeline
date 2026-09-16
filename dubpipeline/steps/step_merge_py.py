@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 from dubpipeline.config import PipelineConfig, normalize_audio_update_mode
-from dubpipeline.source_separation import resolve_background_audio_for_merge
+from dubpipeline.residual_suppression import resolve_background_for_merge
 from dubpipeline.utils.audio_process import MuxMode, mux_smart, run_ffmpeg
 from dubpipeline.utils.logging import info, step, warn, error, debug
 from dubpipeline.utils.quote_pretty_run import norm_arg
@@ -206,7 +206,7 @@ def run(cfg: PipelineConfig) -> None:
 
     if audio_merge_mode == "hq_ducking":
         hq_cfg, selector = merge_hq_config_from_pipeline(cfg)
-        background_wav = resolve_background_audio_for_merge(cfg)
+        background_wav = resolve_background_for_merge(cfg)
         info(f"[merge] selected merge mode: {audio_merge_mode}")
 
         ffmpeg_bin = str(getattr(getattr(cfg, "ffmpeg", None), "bin", "ffmpeg"))
